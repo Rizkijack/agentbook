@@ -5,7 +5,7 @@ import { MIN_ZOOM } from "../src/canvas/engine.js";
 import {
   ROADS, TREES, PROPS, LIGHTS, VEHICLES, VEHICLE_COUNT, FORESTS, DISTRICTS, type District,
   tickScenery, lightState, drawTerrainDecor, pushScenery, type QueueItem,
-  TUFTS_MIN_ZOOM, TUFTS_MIN_PX,
+  TUFTS_MIN_ZOOM, TUFTS_MIN_PX, TREE_DETAIL_MIN_ZOOM,
 } from "../src/canvas/scenery.js";
 
 function mockCtx(): [CanvasRenderingContext2D, Record<string, number>] {
@@ -316,6 +316,35 @@ describe("scenery", () => {
     );
     // The threshold is derived, not chosen: 0.5 screen px over a 4 world px tuft.
     expect(TUFTS_MIN_ZOOM).toBeCloseTo(TUFTS_MIN_PX / 4, 10);
+  });
+
+  it("draws one ellipse per tree below the detail threshold, not tiers", () => {
+    // The tree LOD gate, locked. Two throttle commits both measured a 22x jump in
+    // beginPath between zoom 0.109 and 0.219 - that was SCENERY_MIN_ZOOM (0.125)
+    // turning full tree detail on across a third of the world. Drawing the full
+    // three-tier form for every crown that small is what made that frame cost
+    // more than the rest of the draw path put together.
+    //
+    // Asserted by how many sub-shapes the trees emit either side of the threshold,
+    // so deleting the gate fails this instead of quietly re-making the 22x jump.
+    const scope = { l: 0, r: WorldWidth, t: 0, b: WorldHeight };
+    const shapes = (zoom: number): number => {
+      const [ctx, calls] = mockCtx();
+      const queue: QueueItem[] = [];
+      pushScenery(queue, ctx, { ...scope, zoom }, { isDark: false, night: 0, time: 0 });
+      for (const q of queue) q.draw();
+      let shapes = 0;
+      for (const [key, n] of Object.entries(calls)) {
+        if (key === "beginPath" || key === "ellipse" || key === "arc" || key === "fill") shapes += n;
+      }
+      return shapes;
+    };
+
+    const below = shapes(TREE_DETAIL_MIN_ZOOM * 0.5);
+    const above = shapes(TREE_DETAIL_MIN_ZOOM * 2);
+    // Below the threshold the cheap form runs; above, full detail. If someone
+    // deletes the gate the cheap column and the full column become equal.
+    expect(below, "no cheap form is running below the threshold").toBeLessThan(above);
   });
 
   it("pushes traffic lights into the draw queue and renders 3 bulbs + pole", () => {

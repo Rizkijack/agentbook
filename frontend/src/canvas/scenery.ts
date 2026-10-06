@@ -3376,6 +3376,52 @@ export function drawTerrainDecor(ctx: CanvasRenderingContext2D, view: View, d: S
 }
 
 // --- sortable drawables (trees, props, vehicles) ---------------------------
+/** Canopy colour per species, shared by the detailed and the cheap path. */
+const CANOPY = {
+  pine:  { light: "#3d7a48", dark: "#35603a" },
+  bush:  { light: "#5a9450", dark: "#3f6b39" },
+  birch: { light: "#7ec46a", dark: "#3f7a4a" },
+  oak:   { light: "#4f8f45", dark: "#3f6b39" },
+} as const;
+
+/**
+ * The zoom below which a tree crown is too small to render its detail.
+ *
+ * drawTree's full form is a shadow ellipse, a save/translate/scale/restore, a
+ * trunk, and three or four canopy sub-shapes — about 7 beginPath/fill calls a
+ * tree. At the worst measured zoom, 0.2188, there are thousands of trees in
+ * view, and the frame spends most of its ~8.5k beginPath calls on detail that
+ * lands on a four-pixel disc, which reads identically to one solid circle.
+ *
+ * Below this threshold pushScenery draws each tree as one shadow ellipse and one
+ * canopy disc — two fill calls — instead. The threshold is derived, not chosen:
+ * it is the screen size at which the full tier detail stops being visible,
+ * divided by the tree's average world height.
+ */
+export const TREE_DETAIL_SCREEN_PX = 14;
+const TREE_DETAIL_WORLD_PX = 40;
+export const TREE_DETAIL_MIN_ZOOM = TREE_DETAIL_SCREEN_PX / TREE_DETAIL_WORLD_PX;
+
+/**
+ * The same tree as one shadow ellipse + one canopy disc, for when the crown is
+ * small enough that the tier detail is a quarter pixel. Keeps the species
+ * colour so the forest still reads as pines vs oaks vs birches, just not as
+ * three-tiered silhouettes.
+ */
+function drawTreeCheap(ctx: CanvasRenderingContext2D, t: Tree, d: SceneDraw): void {
+  const { isDark } = d;
+  const x = t.x, y = t.y, s = t.s;
+  ctx.fillStyle = "rgba(0,0,0,0.12)";
+  ctx.beginPath();
+  ctx.ellipse(x, y, 10 * s, 4 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const c = CANOPY[t.kind] ?? CANOPY.oak;
+  ctx.fillStyle = isDark ? c.dark : c.light;
+  ctx.beginPath();
+  ctx.arc(x, y - 14 * s, 11 * s, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 function drawTree(ctx: CanvasRenderingContext2D, t: Tree, d: SceneDraw): void {
   const { isDark } = d;
   const x = t.x, y = t.y, s = t.s;
@@ -3824,9 +3870,17 @@ function roundRectLocal(ctx: CanvasRenderingContext2D, x: number, y: number, w: 
 export function pushScenery(queue: QueueItem[], ctx: CanvasRenderingContext2D, view: View, d: SceneDraw): void {
   const inView = (x: number, y: number) => x > view.l && x < view.r && y > view.t && y < view.b;
 
+  // One detail level for the whole scenery pass. drawTree's full form is a
+  // shadow, a transform and three tiered canopies — a handful of beginPath/fill
+  // a tree — while drawTreeCheap is one ellipse and one disc. The difference
+  // only shows when the crown is large enough to hold it, which the threshold
+  // checks once per frame rather than once per tree.
+  const fullDetail = (view.zoom ?? 1) >= TREE_DETAIL_MIN_ZOOM;
+  const tree = fullDetail ? drawTree : drawTreeCheap;
+
   for (const t of TREES) {
     if (!inView(t.x, t.y)) continue;
-    queue.push({ y: t.y, draw: () => drawTree(ctx, t, d) });
+    queue.push({ y: t.y, draw: () => tree(ctx, t, d) });
   }
   for (const p of PROPS) {
     if (!inView(p.x, p.y)) continue;
