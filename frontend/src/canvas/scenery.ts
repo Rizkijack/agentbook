@@ -3155,6 +3155,42 @@ const TUFTS: Float32Array = (() => {
   return new Float32Array(pts);
 })();
 
+/**
+ * The zoom below which grass tufts are not drawn at all.
+ *
+ * A tuft is 4 world px tall and stroked with a 1 world px line. At the old
+ * whole-town zoom of 0.0547 that is 0.22 screen px of stroke at 0.055 px width —
+ * far under one device pixel at any pixel ratio. It cannot be seen, and it was
+ * costing 29,557 path ops a frame: measured, lineTo 14,781 + moveTo 14,776 at
+ * zoom 0.0547, which is 85% of every op that frame issued.
+ *
+ * Derived rather than chosen, the same way SCENERY_MIN_ZOOM is: a threshold in
+ * screen px divided by the object's world size. 0.5 screen px is where a 1px
+ * stroke stops reliably landing on a pixel at all.
+ */
+export const TUFTS_MIN_PX = 0.5;
+const TUFTS_WORLD_PX = 4;
+export const TUFTS_MIN_ZOOM = TUFTS_MIN_PX / TUFTS_WORLD_PX;
+
+/**
+ * Picket fences, in tiles. Constant, so this lives at module scope: it was an
+ * array literal inside drawTerrainDecor, rebuilt on every frame for data that
+ * never changes.
+ */
+const FENCES = [
+  { x: 66 + 419, y: 61 + 253, w: 11, h: 8 },   // schoolyard
+  { x: 92 + 419, y: 81 + 253, w: 10, h: 7 },   // trough garden
+  { x: 27 + 419, y: 95 + 253, w: 24, h: 18 },  // orchard
+  // --- the districts ---
+  { x: 490, y: 434, w: 18, h: 10 },  // paddock
+  { x: 545, y: 434, w: 16, h: 10 },  // sheepfold
+  { x: 705, y: 485, w: 22, h: 12 },  // cemetery
+  { x: 260, y: 546, w: 20, h: 12 },  // peat yard
+  { x: 780, y: 140, w: 16, h: 10 },  // university garden
+  { x: 205, y: 138, w: 18, h: 10 },  // ore yard
+  { x: 830, y: 288, w: 16, h: 10 },  // aviary
+];
+
 export function drawTerrainDecor(ctx: CanvasRenderingContext2D, view: View, d: SceneDraw): void {
   const { isDark } = d;
 
@@ -3227,7 +3263,16 @@ export function drawTerrainDecor(ctx: CanvasRenderingContext2D, view: View, d: S
   }
   ctx.globalAlpha = 1;
 
-  // roads
+  // roads — two passes.
+  //
+  // Split because setLineDash was being called twice per road, inside the loop:
+  // 383 visible roads meant 766 calls a frame. setLineDash invalidates the whole
+  // stroke state, so that is one of the more expensive calls Canvas2D has, and
+  // it was being paid per road to draw a dash pattern that never changes.
+  //
+  // Pass 1 lays the tarmac, the footway and the edge lines — none of which are
+  // dashed. Pass 2 sets the dash once, draws every centre line as a single path,
+  // and clears it once. Identical pixels on screen, 2 calls instead of 766.
   for (const r of ROADS) {
     const x = r.x1 * V, y = r.y1 * V;
     const w = (r.x2 - r.x1 + 1) * V, h = (r.y2 - r.y1 + 1) * V;
@@ -3245,31 +3290,32 @@ export function drawTerrainDecor(ctx: CanvasRenderingContext2D, view: View, d: S
       ctx.fillStyle = isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.5)";
       ctx.fillRect(x, y + 5, w, 1);
       ctx.fillRect(x, y + h - 6, w, 1);
-      // dashed center line
-      ctx.strokeStyle = isDark ? "rgba(216,182,78,0.5)" : "#d8b64e";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([10, 9]);
-      ctx.beginPath();
-      ctx.moveTo(x + 6, y + h / 2);
-      ctx.lineTo(x + w - 6, y + h / 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
     } else {
       ctx.fillRect(x, y, 5, h);
       ctx.fillRect(x + w - 5, y, 5, h);
       ctx.fillStyle = isDark ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.5)";
       ctx.fillRect(x + 5, y, 1, h);
       ctx.fillRect(x + w - 6, y, 1, h);
-      ctx.strokeStyle = isDark ? "rgba(216,182,78,0.5)" : "#d8b64e";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([10, 9]);
-      ctx.beginPath();
-      ctx.moveTo(x + w / 2, y + 6);
-      ctx.lineTo(x + w / 2, y + h - 6);
-      ctx.stroke();
-      ctx.setLineDash([]);
     }
   }
+  ctx.strokeStyle = isDark ? "rgba(216,182,78,0.5)" : "#d8b64e";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([10, 9]);
+  ctx.beginPath();
+  for (const r of ROADS) {
+    const x = r.x1 * V, y = r.y1 * V;
+    const w = (r.x2 - r.x1 + 1) * V, h = (r.y2 - r.y1 + 1) * V;
+    if (!visible(x, y, w, h, view, 0)) continue;
+    if (w >= h) {
+      ctx.moveTo(x + 6, y + h / 2);
+      ctx.lineTo(x + w - 6, y + h / 2);
+    } else {
+      ctx.moveTo(x + w / 2, y + 6);
+      ctx.lineTo(x + w / 2, y + h - 6);
+    }
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
 
   // crosswalks + traffic light corners
   const zebra = isDark ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.8)";
@@ -3282,48 +3328,51 @@ export function drawTerrainDecor(ctx: CanvasRenderingContext2D, view: View, d: S
     for (let i = 0; i < 4; i++) ctx.fillRect(L.cx - 15, L.cy - 32 + i * 7, 30, 4);
   }
 
-  // fences (picket)
-  const FENCES = [
-    { x: 66 + 419, y: 61 + 253, w: 11, h: 8 },   // schoolyard
-    { x: 92 + 419, y: 81 + 253, w: 10, h: 7 },   // trough garden
-    { x: 27 + 419, y: 95 + 253, w: 24, h: 18 },  // orchard
-    // --- the districts ---
-    { x: 490, y: 434, w: 18, h: 10 },  // paddock
-    { x: 545, y: 434, w: 16, h: 10 },  // sheepfold
-    { x: 705, y: 485, w: 22, h: 12 },  // cemetery
-    { x: 260, y: 546, w: 20, h: 12 },  // peat yard
-    { x: 780, y: 140, w: 16, h: 10 },  // university garden
-    { x: 205, y: 138, w: 18, h: 10 },  // ore yard
-    { x: 830, y: 288, w: 16, h: 10 },  // aviary
-  ];
+  // fences (picket). Constant data, so it is built once at module scope rather
+  // than re-allocated on every frame — it used to be an array literal inside the
+  // draw function, which is 11 objects of garbage per frame for nothing.
   ctx.strokeStyle = isDark ? "#5a5148" : "#f2ede2";
   ctx.lineWidth = 1.4;
   for (const f of FENCES) {
     const x = f.x * V, y = f.y * V, w = f.w * V, h = f.h * V;
     if (!visible(x, y, w, h, view, 0)) continue;
     ctx.strokeRect(x, y, w, h);
-    ctx.setLineDash([3, 5]);
-    ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
-    ctx.setLineDash([]);
   }
+  // The inner picket run is dashed and every fence wants the same dash, so it is
+  // set once for the lot rather than once per fence — same reason as the road
+  // centre lines above.
+  ctx.setLineDash([3, 5]);
+  for (const f of FENCES) {
+    const x = f.x * V, y = f.y * V, w = f.w * V, h = f.h * V;
+    if (!visible(x, y, w, h, view, 0)) continue;
+    ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+  }
+  ctx.setLineDash([]);
 
   // grass tufts — one batched stroke for the whole field. Positions are baked
   // in TUFTS above; only the visibility cull runs per frame. (Was: 6 canvas
   // ops per tuft, ~47k ops at full zoom-out.)
-  // Grass belongs to the field and the parks, not to a paved lot — that rule
+  // Grass belongs to the field and the parks, not to a paved lot - that rule
   // is already baked into TUFTS.
-  ctx.strokeStyle = isDark ? "rgba(120,160,110,0.28)" : "rgba(70,120,60,0.35)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let i = 0; i < TUFTS.length; i += 2) {
-    const x = TUFTS[i]!, y = TUFTS[i + 1]!;
-    if (!visible(x, y, 2, 2, view, 0)) continue;
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + 2, y - 4);
-    ctx.moveTo(x, y);
-    ctx.lineTo(x - 2, y - 3);
+  //
+  // Skipped entirely below TUFTS_MIN_ZOOM. Batching turned thousands of stroke
+  // calls into one, but the 29,557 path ops inside that stroke are still the
+  // rasteriser's problem, and at that zoom each lands on less than a quarter of
+  // a pixel. The loop itself is guarded, not just its contents.
+  if ((view.zoom ?? 1) >= TUFTS_MIN_ZOOM) {
+    ctx.strokeStyle = isDark ? "rgba(120,160,110,0.28)" : "rgba(70,120,60,0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < TUFTS.length; i += 2) {
+      const x = TUFTS[i]!, y = TUFTS[i + 1]!;
+      if (!visible(x, y, 2, 2, view, 0)) continue;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 2, y - 4);
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 2, y - 3);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
 }
 
 // --- sortable drawables (trees, props, vehicles) ---------------------------

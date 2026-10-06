@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { LOCATIONS } from "../src/canvas/locationsData.js";
 import { WorldWidth, WorldHeight, Pe, vt, V } from "../src/canvas/constants.js";
+import { MIN_ZOOM } from "../src/canvas/engine.js";
 import {
   ROADS, TREES, PROPS, LIGHTS, VEHICLES, VEHICLE_COUNT, FORESTS, DISTRICTS, type District,
   tickScenery, lightState, drawTerrainDecor, pushScenery, type QueueItem,
+  TUFTS_MIN_ZOOM, TUFTS_MIN_PX,
 } from "../src/canvas/scenery.js";
 
 function mockCtx(): [CanvasRenderingContext2D, Record<string, number>] {
@@ -287,6 +289,33 @@ describe("scenery", () => {
     expect(() => drawTerrainDecor(ctx, view, { isDark: false, night: 0, time: 0 })).not.toThrow();
     const total = Object.values(calls).reduce((a, b) => a + b, 0);
     expect(total).toBeGreaterThan(100);
+  });
+
+  it("drops grass tufts below the zoom where they would be sub-pixel", () => {
+    // The tuft LOD gate, locked. Measured motivation: a tuft is 4 world px and
+    // at MIN_ZOOM it renders 0.22 screen px, while costing 29,557 path ops a
+    // frame — 85% of everything the frame drew. So MIN_ZOOM has to sit below the
+    // gate, or the optimisation never runs at the zoom the complaint came from.
+    //
+    // Asserted by comparing op counts either side of the threshold on a whole-
+    // world view, so deleting the gate fails this instead of quietly costing
+    // 29k ops a frame again.
+    const wholeWorld = { l: 0, r: WorldWidth, t: 0, b: WorldHeight };
+    const opsAt = (zoom: number): number => {
+      const [ctx, calls] = mockCtx();
+      drawTerrainDecor(ctx, { ...wholeWorld, zoom }, { isDark: false, night: 0, time: 0 });
+      return Object.values(calls).reduce((a, b) => a + b, 0);
+    };
+
+    const below = opsAt(TUFTS_MIN_ZOOM * 0.5);
+    const above = opsAt(TUFTS_MIN_ZOOM * 2);
+
+    expect(above - below, "tufts are not dropped below the gate at all").toBeGreaterThan(1000);
+    expect(MIN_ZOOM, "whole-town zoom sits above the tuft gate, so the gate never fires").toBeLessThan(
+      TUFTS_MIN_ZOOM,
+    );
+    // The threshold is derived, not chosen: 0.5 screen px over a 4 world px tuft.
+    expect(TUFTS_MIN_ZOOM).toBeCloseTo(TUFTS_MIN_PX / 4, 10);
   });
 
   it("pushes traffic lights into the draw queue and renders 3 bulbs + pole", () => {
