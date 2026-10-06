@@ -254,6 +254,13 @@ export interface AgentSprite {
   walkPhase: number;
   idlePhase: number;
   targetPlace: string;
+  /**
+   * Rendered sprite cache. The llama bitmap is re-rendered only when the
+   * quantized pose changes — without this every visible resident allocated a
+   * fresh DOM canvas + ImageData and ran the 3,016px copy loop every frame,
+   * which was the main source of camera stutter at town zoom.
+   */
+  sprite?: { key: string; canvas: HTMLCanvasElement; img: ImageData };
 }
 
 interface Puff {
@@ -482,9 +489,13 @@ export class Xf {
   tick(dt: number): void {
     this.t += dt;
     this.clock = (this.clock + dt / this.dayLength) % 1;
-    this.cam.x += (this.cam.tx - this.cam.x) * 0.08;
-    this.cam.y += (this.cam.ty - this.cam.y) * 0.08;
-    this.cam.zoom += (this.cam.tz - this.cam.zoom) * 0.08;
+    // Frame-rate-independent exponential smoothing. The old 0.08/frame factor
+    // made the camera converge at a different speed on every refresh rate and
+    // stutter whenever frames dropped; k matches 0.08 at 60fps exactly.
+    const k = 1 - Math.exp(-dt * 5);
+    this.cam.x += (this.cam.tx - this.cam.x) * k;
+    this.cam.y += (this.cam.ty - this.cam.y) * k;
+    this.cam.zoom += (this.cam.tz - this.cam.zoom) * k;
 
     const actSpeed: Record<string, number> = {
       sleep: 0,
@@ -1140,33 +1151,51 @@ export class Xf {
       queue.push({
         y: a.y,
         draw: () => {
-          const genes = Hc(a.genes);
           // walkPhase is now maintained per-agent, not global t
           const walkPhase = a.walkPhase % 1;
-          const sk = sf({ t: this.t + hashId(a.id) * 0.01, walkPhase, doing: a.doing, facing: a.facing });
           const shake = a.doing === "shake" ? Math.sin(this.t * 38 + hashId(a.id)) * Math.max(0.6, 2.2 * NPC_K) : 0;
           const idleBob = Math.sin(a.idlePhase * 0.9) * 0.6;
           const speedBob = a.path.length > 0 ? Math.abs(Math.sin(walkPhase * Math.PI * 2)) * 1.0 : 0;
-          const buf = renderLlama(genes, sk);
+          // Sprite cache: re-render the bitmap only when the quantized pose
+          // changes (12 walk buckets x 15 time buckets/s x activity). Facing
+          // is applied as a draw-time mirror below, so it is not part of the
+          // key. Reuses one offscreen canvas + ImageData per agent — zero DOM
+          // allocation on cache hits.
+          const at = this.t + hashId(a.id) * 0.01;
+          const key = a.doing + "|" + ((walkPhase * 12) | 0) + "|" + ((at * 15) | 0);
+          let spr = a.sprite;
+          if (!spr || spr.key !== key) {
+            const genes = Hc(a.genes);
+            const sk = sf({ t: at, walkPhase, doing: a.doing, facing: a.facing });
+            const buf = renderLlama(genes, sk);
+            let canvas = spr?.canvas;
+            if (!canvas) {
+              canvas = document.createElement("canvas");
+              canvas.width = BUF_W;
+              canvas.height = BUF_H;
+            }
+            const octx = canvas.getContext("2d")!;
+            const img = spr?.img ?? octx.createImageData(BUF_W, BUF_H);
+            const data = img.data;
+            data.fill(0);
+            for (let i = 0; i < buf.length; i++) {
+              const v = buf[i]!;
+              const pa = v & 0xff;
+              if (pa === 0) continue;
+              const o = i * 4;
+              data[o] = (v >>> 24) & 0xff;
+              data[o + 1] = (v >>> 16) & 0xff;
+              data[o + 2] = (v >>> 8) & 0xff;
+              data[o + 3] = pa;
+            }
+            octx.putImageData(img, 0, 0);
+            spr = a.sprite = { key, canvas, img };
+          }
+          const off = spr.canvas;
           // NPC_H/NPC_GROUND_ROW → town-median-derived resident, still 1/3 car
           const scale = NPC_SCALE;
           const w = BUF_W * scale;
           const h = BUF_H * scale;
-          const off = document.createElement("canvas");
-          off.width = BUF_W;
-          off.height = BUF_H;
-          const octx = off.getContext("2d")!;
-          const img = octx.createImageData(BUF_W, BUF_H);
-          for (let i = 0; i < buf.length; i++) {
-            const v = buf[i]!;
-            const a8 = v & 0xff;
-            if (a8 === 0) continue;
-            img.data[i * 4 + 0] = (v >>> 24) & 0xff;
-            img.data[i * 4 + 1] = (v >>> 16) & 0xff;
-            img.data[i * 4 + 2] = (v >>> 8) & 0xff;
-            img.data[i * 4 + 3] = a8;
-          }
-          octx.putImageData(img, 0, 0);
 
           ctx.save();
           // add bob + shake
