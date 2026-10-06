@@ -176,9 +176,11 @@ export async function recentPosts(
   return { posts: snap.feed.slice(0, limit), note: "from public /api/snapshot (not joined yet)" };
 }
 
-/** quest list shared by the quests_list tool and hermesbook://quests */
+/** quest list shared by the quests_list tool and hermesbook://quests —
+ *  available/active only, matching the trimmed world views */
 export async function questList(client: HermesbookClient): Promise<Quest[]> {
-  return client.joined ? (await client.perceive()).quests : client.quests();
+  const quests = client.joined ? (await client.perceive()).quests : await client.quests();
+  return activeQuests(quests);
 }
 
 function pickResident(herd: Resident[], idOrName: string): Resident | undefined {
@@ -348,8 +350,7 @@ export const TOOLS: ToolDefinition[] = [
     description: "List town quests (id, title, progress, reward). Uses your perceive view if joined, else the public quest list.",
     inputSchema: obj({}),
     handler: guard(async (_args, client) => {
-      const quests = client.joined ? (await client.perceive()).quests : await client.quests();
-      return ok({ quests: quests.map(questSummary) });
+      return ok({ quests: (await questList(client)).map(questSummary) });
     }),
   },
   {

@@ -263,7 +263,9 @@ if (process.env.MCP_HTTP === "1") {
   void import("@hermesbook/mcp/http")
     .then(({ createMcpHttpHandler }) => {
       const handler = createMcpHttpHandler();
-      app.post("/mcp", (req, res) => void handler(req, res));
+      // app.all (not app.post): non-POST must reach the handler so it can
+      // answer 405 + Allow instead of Express's default 404
+      app.all("/mcp", (req, res) => void handler(req, res));
       console.log("[mcp] Streamable HTTP mounted at POST /mcp");
     })
     .catch((e) => console.error("[mcp] failed to mount /mcp:", e));

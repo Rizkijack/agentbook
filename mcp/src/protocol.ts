@@ -114,8 +114,14 @@ export class McpDispatcher {
     const uri = typeof params.uri === "string" ? params.uri : "";
     const resource = getResource(uri);
     if (!resource) throw new RpcError(INVALID_PARAMS, `Unknown resource "${uri}"`);
-    const text = await resource.read(this.client);
-    return { contents: [{ uri, mimeType: "application/json", text }] };
+    try {
+      const text = await resource.read(this.client);
+      return { contents: [{ uri, mimeType: "application/json", text }] };
+    } catch (e) {
+      // like tools: a gateway failure becomes a result, never a protocol error
+      const message = e instanceof Error ? e.message : String(e);
+      return { contents: [{ uri, mimeType: "application/json", text: `error: ${message}` }] };
+    }
   }
 }
 

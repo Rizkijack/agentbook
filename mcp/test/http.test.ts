@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMcpHttpHandler, type HttpReqLike, type HttpResLike } from "../src/http.js";
 import { McpDispatcher } from "../src/protocol.js";
 import { HermesbookClient } from "../src/client.js";
+import { stubFetch } from "./fixtures.js";
 import { TOOLS } from "../src/tools.js";
 import { RESOURCES } from "../src/resources.js";
 
@@ -47,6 +48,7 @@ function posted(payload: unknown) {
 }
 
 describe("MCP Streamable HTTP transport (stateless)", () => {
+  afterEach(() => vi.unstubAllGlobals());
   it("initialize + tools/list over POST returns serverInfo and the same 10 tools as stdio", async () => {
     const handler = createMcpHttpHandler(() => new HermesbookClient("http://gw.test"));
 
@@ -126,16 +128,19 @@ describe("MCP Streamable HTTP transport (stateless)", () => {
     expect(toolBody.result?.isError).toBe(true);
   });
 
-  it("a failing tool does not crash the transport — JSON-RPC error -32603 comes back", async () => {
-    const broken = new HermesbookClient("http://gw.test");
-    (broken as unknown as { fetch: unknown }).fetch = () => Promise.reject(new Error("boom"));
-    const handler = createMcpHttpHandler(() => broken);
+  it("a failing tool does not crash the transport — an isError result comes back", async () => {
+    // stub the GLOBAL fetch: HermesbookClient calls it directly, so overriding
+    // an instance property would be a no-op mock
+    stubFetch(() => {
+      throw new Error("boom");
+    });
+    const handler = createMcpHttpHandler(() => new HermesbookClient("http://gw.test"));
     const res = fakeRes();
     await handler(posted({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "world_status", arguments: {} } }), res);
     expect(res.statusCode).toBe(200);
-    const body = res.body as { error?: { code: number }; result?: unknown };
+    const body = res.body as { error?: { code: number }; result?: { isError?: boolean } };
     if (body.error) expect(body.error.code).toBe(-32603);
-    else expect(body.result).toBeTruthy();
+    else expect(body.result?.isError).toBe(true);
   });
 });
 

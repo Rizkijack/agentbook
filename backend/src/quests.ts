@@ -187,7 +187,11 @@ export function updateQuestProgress(world: TownSnapshot, evt: { act: string; pla
       // explore requires distinct places: we track visited set via progress+visited cache
       // store visited in quest as _visited hidden
       const anyQ = q as any;
-      if (!anyQ._visited) anyQ._visited = new Set<string>();
+      // _visited is a Set in memory, but JSON persistence turns it into a plain
+      // object — revive it instead of crashing on .has()
+      if (!(anyQ._visited instanceof Set)) {
+        anyQ._visited = new Set<string>(Array.isArray(anyQ._visited) ? anyQ._visited : []);
+      }
       if (!anyQ._visited.has(evt.place)) {
         anyQ._visited.add(evt.place);
         matched = true;

@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import { pathToFileURL } from "node:url";
 import { HermesbookClient } from "./client.js";
 import { McpDispatcher, type JsonRpcMessage, type JsonRpcResponse } from "./protocol.js";
 
@@ -45,6 +46,8 @@ function write(payload: JsonRpcResponse): void {
 }
 
 // run when executed directly: `node dist/stdio.js`
-if (process.argv[1] && import.meta.url === new URL(`file:///${process.argv[1].replace(/\\/g, "/")}`).href) {
+// (pathToFileURL resolves relative argv[1] against cwd — a raw string
+// comparison never matches because import.meta.url is absolute)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   startStdio();
 }

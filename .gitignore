@@ -11,3 +11,6 @@ backend/dist
 shared/dist
 .DS_Store
 .vercel
+
+# tsc incremental build info — stale copies silently break builds
+*.tsbuildinfo
