@@ -1,6 +1,16 @@
 import type { Resident, TownConfig } from "./types.js";
 
-export type SSEOrder = { type: "order"; id: string; act: string; place: string; secs: number };
+export type SSEOrder = {
+  type: "order";
+  id: string;
+  act: string;
+  place: string;
+  secs: number;
+  /** npc-agent skill rule id behind this order (skills/npc-agent) */
+  skill?: string;
+  /** the resident's stated reason for it — what the HUD shows as "thinking" */
+  why?: string;
+};
 export type SSEPost = { type: "post"; post: import("./types.js").Post };
 export type SSELlama = { type: "llama"; llama: Resident };
 export type SSEHerd = { type: "herd"; herd: Resident[] };

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Xf, RANK_COLORS, ENTRANT_COLOR, type ContestMark } from "./engine.js";
+import { Xf, RANK_COLORS, ENTRANT_COLOR, NPC_H, type ContestMark } from "./engine.js";
 import { LOCATIONS } from "./locationsData.js";
 import { parseHash } from "../router/hash.js";
-import { CONTEST, type Contest, type ContestState } from "@hermesbook/shared";
+import { CONTEST, type Contest, type ContestState } from "@slopagentbook/shared";
 
 const DRAG_CLICK_SLOP = 5; // px of pointer travel still counted as a click
 
@@ -73,6 +73,11 @@ function mmss(ms: number): string {
  * The thin bar (08 §10.1). It sits 48px below the top edge so the canvas keeps
  * its `Reset` / `Free Cam` buttons (top-right) and its drag hint (bottom-left)
  * exactly where they were — see 08 §10.4; the buttons are never moved.
+ *
+ * Every colour comes from the --hud-* tokens, so the bar follows the theme
+ * instead of carrying a copy of the light one: it used to hardcode
+ * rgba(244,241,234,0.94) over #1b1915 text, and on the dark theme that is a
+ * cream slab across the map.
  */
 function ContestHud({ contest, phase, herd, now }: {
   contest: Contest;
@@ -94,14 +99,14 @@ function ContestHud({ contest, phase, herd, now }: {
         position: "absolute", top: 48, left: 8, right: 8,
         display: "flex", alignItems: "center", gap: 12, padding: "6px 10px",
         overflow: "hidden", whiteSpace: "nowrap",
-        background: "rgba(244,241,234,0.94)", border: "1px solid #1b1915",
-        fontFamily: "JetBrains Mono", fontSize: 11, color: "#1b1915",
-        boxShadow: "0 2px 0 rgba(27,25,21,0.16)",
+        background: "var(--hud-paper)", border: "1px solid var(--hud-rule)",
+        fontFamily: "JetBrains Mono", fontSize: 11, color: "var(--hud-ink)",
+        boxShadow: "var(--hud-shadow)",
       }}
     >
-      <span style={{ fontSize: 9, letterSpacing: "0.16em", color: phase === "live" ? ENTRANT_COLOR : "#8a8578" }}>{label}</span>
+      <span style={{ fontSize: 9, letterSpacing: "0.16em", color: phase === "live" ? ENTRANT_COLOR : "var(--muted)" }}>{label}</span>
       <strong data-testid="contest-title" style={{ fontFamily: "Instrument Serif", fontSize: 16, fontWeight: 400 }}>{contest.title}</strong>
-      <span style={{ fontSize: 10, color: "#6f6a61" }}>@ {venue}</span>
+      <span style={{ fontSize: 10, color: "var(--muted)" }}>@ {venue}</span>
 
       {phase === "announced" && (
         <>
@@ -135,7 +140,7 @@ function ContestHud({ contest, phase, herd, now }: {
               : `${nameOf(contest.result.standings.find((s) => s.rank === 1)?.agentId ?? "")} wins`
             : "awaiting the result"}
           {contest.result && (
-            <span style={{ color: "#6f6a61", marginLeft: 8 }}>
+            <span style={{ color: "var(--muted)", marginLeft: 8 }}>
               {contest.result.standings.slice(0, 3).map((s) => `${s.rank}. ${nameOf(s.agentId)}`).join("  ")}
             </span>
           )}
@@ -148,12 +153,15 @@ function ContestHud({ contest, phase, herd, now }: {
 export function WorldCanvas({
   snapshot,
   onPick,
+  onFollowChange,
 }: {
   snapshot: {
     herd: Array<{ id: string; name: string; handle: string; genes: string; mind: { doing: { place: string; act: string } }; born: number }>;
     contests?: Contest[];
   };
   onPick?: (id: string) => void;
+  /** Fired on every follow change, so the HUD can mirror the engine exactly. */
+  onFollowChange?: (id: string | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const xfRef = useRef<Xf | null>(null);
@@ -161,6 +169,7 @@ export function WorldCanvas({
   // snapshot push can never rebuild (and re-centre) the camera.
   const initialRef = useRef(snapshot);
   const onPickRef = useRef(onPick);
+  const onFollowChangeRef = useRef(onFollowChange);
 
   // --- contest channel (08 §10.1 / §10.3) ---------------------------------
   // The route forces a specific contest; everywhere else the HUD follows the
@@ -202,13 +211,16 @@ export function WorldCanvas({
 
   useEffect(() => {
     onPickRef.current = onPick;
-  }, [onPick]);
+    onFollowChangeRef.current = onFollowChange;
+  }, [onPick, onFollowChange]);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
     const xf = new Xf(initialRef.current);
     xfRef.current = xf;
+    // every follow change — pick, Free Cam, Escape, drag — reaches the HUD here
+    xf.onFollow = (id) => onFollowChangeRef.current?.(id);
 
     // attach to global for SSE handlers (simple)
     (window as unknown as Record<string, unknown>).__hermes_xf = xf;
@@ -252,9 +264,12 @@ export function WorldCanvas({
       const r = canvas.getBoundingClientRect();
       const sx = clientX - r.left;
       const sy = clientY - r.top;
-      // find nearest agent by screen distance
+      // find nearest agent by screen distance. 44px was the reach for a 63px
+      // sprite; tie it to NPC_H (x2 for the name tag, floor for zoomed-out
+      // maps) so a tap near a resident still picks them without stealing taps
+      // meant for open ground
       let best: string | null = null;
-      let bestDist = 44;
+      let bestDist = Math.max(24, NPC_H * xf.cam.zoom * 2);
       for (const a of xf.byId.values()) {
         const ax = (a.x - xf.cam.x) * xf.cam.zoom + r.width / 2;
         const ay = (a.y - xf.cam.y) * xf.cam.zoom + r.height / 2;
@@ -264,6 +279,10 @@ export function WorldCanvas({
       if (best) {
         xf.setFollow(best);
         onPickRef.current?.(best);
+      } else {
+        // Open ground lets go: a tap is the counterpart of Free Cam, so the
+        // camera is never stuck on a resident the player tapped by accident.
+        xf.setFollow(null);
       }
     };
 
@@ -382,6 +401,7 @@ export function WorldCanvas({
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      xf.onFollow = null;
       window.removeEventListener("resize", applySize);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
@@ -470,7 +490,7 @@ export function WorldCanvas({
         <button className="btn btn-ghost" style={{ padding: "6px 10px", fontSize: 11 }} onClick={() => xfRef.current?.resetCam()}>Reset</button>
         <button className="btn btn-ghost" style={{ padding: "6px 10px", fontSize: 11 }} onClick={() => xfRef.current?.setFollow(null)}>Free Cam</button>
       </div>
-      <div className="mono" style={{ position: "absolute", bottom: 8, left: 8, background: "rgba(244,241,234,0.92)", border: "1px solid #1b1915", padding: "4px 8px", fontSize: 11 }}>
+      <div className="mono" style={{ position: "absolute", bottom: 8, left: 8, background: "var(--hud-paper)", border: "1px solid var(--hud-rule)", color: "var(--hud-ink)", boxShadow: "var(--hud-shadow)", padding: "4px 8px", fontSize: 11 }}>
         Drag to pan · scroll/pinch to zoom at cursor · click a resident to follow · arrows to pan · 0 to reset
       </div>
       {/* 08 §10.1 — transient bar; nothing at all on a quiet day */}

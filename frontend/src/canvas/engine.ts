@@ -1,22 +1,225 @@
-import { V, WorldWidth, WorldHeight } from "./constants.js";
+import { V, Pe, vt, WorldWidth, WorldHeight, WorldSize } from "./constants.js";
 import { LOCATIONS } from "./locationsData.js";
 import { pf } from "./pf.js";
-import { DAY_LENGTH_SEC, Hc } from "@hermesbook/shared";
+import { navmap } from "./navmap.js";
+import { DAY_LENGTH_SEC, Hc } from "@slopagentbook/shared";
 import { renderLlama } from "./renderer/draw.js";
 import { sf } from "./renderer/skeleton.js";
 import { BUF_W, BUF_H } from "./renderer/pixelBuffer.js";
 import { drawTerrainDecor, pushScenery, tickScenery, LAMP_GLOWS, type View, type SceneDraw } from "./scenery.js";
 
-export const MIN_ZOOM = 0.45;
+/**
+ * The box the whole town has to fit inside, in CSS px.
+ *
+ * Read off the layout rather than picked: 560 is the height WorldCanvas gives
+ * the canvas, and 1280 - 2x24 is the widest content box the page will ever hand
+ * it (`.page { max-width: 1280px; padding: 24px }`).
+ */
+const FIT_BOX = { w: 1280 - 24 * 2, h: 560 };
+
+/**
+ * MIN_ZOOM — how far out a player may pull, derived from the world, not chosen.
+ *
+ * It used to be the literal 0.45. That number was picked when the map was
+ * 210x128 (3360x2048 world px), where 0.45 in an ~890px viewport showed about
+ * half the town. The map grew 5x to 1050x640 and the literal stayed, so the
+ * floor silently became 9x too tight: at 0.45 you saw 124 of the 1050 tiles,
+ * 12% of the town, and there was no whole-town view at all.
+ *
+ * This is the *contain* zoom for FIT_BOX: the smaller of the two ratios, so the
+ * entire world is inside the viewport along whichever axis binds.
+ * Today: min(1232/16800, 560/10240) = min(0.0733, 0.0546875) = 0.0546875 —
+ * all 640 rows, and all 1050 columns in any window at least 919px wide. It is
+ * WorldSize (Pe*V by vt*V) in both numerator and denominator, so growing the
+ * grid again moves this number with it; a test recomputes it from Pe/vt/V.
+ */
+export const MIN_ZOOM = Math.min(FIT_BOX.w / WorldSize.width, FIT_BOX.h / WorldSize.height);
 export const MAX_ZOOM = 2.8;
 /** Where the camera starts, and where "Reset" returns to. */
-const CAM_HOME_X = 1600;
-const CAM_HOME_Y = 900;
+/**
+ * Where the camera opens: the town square.
+ *
+ * Derived, not pinned. This used to be the literal 1600/900, which happened to
+ * sit on the square only while the map was 210x128 — grow the world and the
+ * camera opens over empty field with the whole town off-screen to the right.
+ * Square is at the centre of the grid by construction (the original 42
+ * locations were translated, not rescaled, to put it there).
+ */
+const SQUARE = LOCATIONS.find((l) => l.id === "square")!;
+const CAM_HOME_X = (SQUARE.x + SQUARE.w / 2) * V;
+const CAM_HOME_Y = (SQUARE.y + SQUARE.h / 2) * V;
+
+/**
+ * Resident height in world px — the proportion lock for the whole sprite.
+ *
+ * Derived, not picked: 1/10 of the town's own median built structure.
+ * Characteristic size = average of the median footprint width and height
+ * over every solid location (Food/Water are terrain, not buildings), in
+ * world px, divided by ten and rounded. Today that is
+ * ((128 + 80) / 2) / 10 = 10.4 → 10px — which also lands within a pixel
+ * of 1/3 of a car body (28px), so the two readings still agree and the
+ * number stays a spec, not a taste call. When the town grows, this moves
+ * with it (npc-proportions.test.ts recomputes it independently).
+ *
+ * Before this, the sprite was blitted at scale 1.4 = 63px tall: as tall as a
+ * house and twice a car. Every offset below is derived from NPC_H instead of
+ * being hand-tuned, so the whole figure (shadow, ring, name tag, bubble) moves
+ * together when this one number changes.
+ */
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+}
+const BUILT = LOCATIONS.filter((l) => l.category !== "Food" && l.category !== "Water");
+const TOWN_MED_W = median(BUILT.map((l) => l.w * V));
+const TOWN_MED_H = median(BUILT.map((l) => l.h * V));
+export const NPC_H = Math.round(((TOWN_MED_W + TOWN_MED_H) / 2) / 10);
+/** Buffer row in renderer/pixelBuffer where the hooves land (see draw.ts). */
+const NPC_GROUND_ROW = 45;
+/** Buffer px → world px, i.e. what makes the sprite exactly NPC_H tall. */
+export const NPC_SCALE = NPC_H / NPC_GROUND_ROW;
+/** Ratio against offsets that were sized for the old 63px sprite. */
+const NPC_K = NPC_H / 63;
+
+/**
+ * Building ink — one palette per theme, one entry per category.
+ *
+ * This used to be a ternary per colour inside the draw loop, with the dark
+ * theme's values chosen by eye next to the light ones. In the dark theme every
+ * wall was DARKER than the ground it stood on, so a building read as a hole
+ * rather than a mass. Relative luminance against the #33302a district apron
+ * (0.0298) that drawTerrainDecor paints the city on:
+ *
+ *   was:  wall 0.019-0.027  roof 0.032-0.083  trim 0.037-0.046   → 0.7x / 1.2-2.8x / 1.2-1.6x
+ *   now:  wall 0.050-0.061  roof 0.075-0.163  trim 0.177-0.280   → 1.7-2.1x / 2.5-5.5x / 5.9-9.4x
+ *
+ * Same relationship the light theme already has (wall 0.73, roof 0.13, trim
+ * 0.01 on a 0.55 ground — a dark roofline on a pale mass), inverted for ground
+ * that is itself dark: the roof is the shape that reads and the trim is the edge
+ * that separates a building from its neighbour. The night mood is intact —
+ * nothing here is brighter than a street lamp.
+ *
+ * Tables rather than CSS custom properties: nothing in the cascade consumes
+ * these sixteen colours, so tokens would be a data file pretending to be a
+ * stylesheet. The two colours the engine DOES take from tokens are the ground
+ * pair, read once per frame at the top of draw().
+ */
+interface BuildInk { wall: string; roof: string; trim: string; wood: string; }
+export const BUILD_INK: Record<"light" | "dark", Record<string, BuildInk>> = {
+  light: {
+    base: { wall: "#e8ddd0", roof: "#8b5a3c", trim: "#1b1915", wood: "#c9a86a" },
+    Social: { wall: "#efe6d5", roof: "#a66a3a", trim: "#5a3a1e", wood: "#c9a86a" },
+    Civic: { wall: "#e6e2dd", roof: "#6b6a6e", trim: "#2b2a2e", wood: "#c9a86a" },
+    Work: { wall: "#e8d5c0", roof: "#9a6a3a", trim: "#3d2a18", wood: "#c9a86a" },
+    Rest: { wall: "#b54a3a", roof: "#7a2e22", trim: "#4a1e14", wood: "#d8c9a8" },
+  },
+  dark: {
+    base: { wall: "#443e37", roof: "#7d5738", trim: "#7f7362", wood: "#6b5a42" },
+    Social: { wall: "#4c4238", roof: "#8a5c3a", trim: "#857660", wood: "#6b5a42" },
+    Civic: { wall: "#454648", roof: "#6f7076", trim: "#8e9099", wood: "#6b5a42" },
+    Work: { wall: "#4a4038", roof: "#7d5738", trim: "#857660", wood: "#6b5a42" },
+    Rest: { wall: "#5a3a30", roof: "#6b4438", trim: "#95705e", wood: "#7b6a54" },
+  },
+};
 
 /** 08 §10.2 — name-tag / ring colour by finishing rank: 1st, 2nd, 3rd. */
 export const RANK_COLORS = ["#c9a86a", "#b9c0c4", "#b87333"] as const;
 /** Entrants before a result exists — everyone competing gets the same mark. */
 export const ENTRANT_COLOR = "#7a5cc4";
+
+/**
+ * Level of detail — the zoom floors below are all "an object this small on
+ * screen is not worth a draw call", stated in screen px and divided by the
+ * object's world-px size. Nothing here is a taste number: each one is a
+ * visibility floor, and each floor came from measuring the cost of not having
+ * it (zoom-lod.test.ts pins the numbers this is derived from).
+ */
+
+/** Name-tag text height, in screen px. Fixed: the tag does not scale. */
+const TAG_PX = 8;
+
+/**
+ * Below this zoom, name tags stop being drawn (except for the followed
+ * resident).
+ *
+ * A tag is a fixed 8 screen px, so pulling the camera back makes each one cover
+ * MORE world, not less. At MIN_ZOOM (0.0547) a tag is 14x the resident it
+ * names — the resident is 0.5 screen px and the tag is 8 — and 64 of them stack
+ * into an unreadable mass that hides the town they are labelling. Above this
+ * zoom the tag is no taller than the figure it names and reads as a caption.
+ *
+ * Derived from NPC_H, which is itself derived from the town's own median
+ * building, so "a tag is smaller than its resident" stays true when the town
+ * grows instead of being a number someone picked once.
+ */
+export const TAG_MIN_ZOOM = TAG_PX / NPC_H;
+
+/** A resident is drawn while it is at least this many screen px tall. */
+const NPC_MIN_PX = 1.5;
+
+/** Resident world px -> the zoom at which it is still NPC_MIN_PX tall. */
+export const NPC_MIN_ZOOM = NPC_MIN_PX / NPC_H;
+
+/**
+ * Tallest silhouette the scenery pass draws: a full-size pine, 36 world px of
+ * trunk-to-crown times the largest per-tree scale (1.35) = ~48.
+ */
+const SCENERY_TALLEST_W = 48;
+
+/**
+ * Per-object scenery (trees, props, traffic lights, vehicles) stops being drawn
+ * while the largest silhouette is under this many screen px.
+ *
+ * This is the one that matters. Measured at an 890x560 viewport, one frame of
+ * draw() issues: 10.5k canvas ops at the old MIN_ZOOM 0.45, of which 7.8k is
+ * scenery; and 299k ops at 0.0547, of which 249k — 83% — is the per-object pass
+ * over 6,012 trees, 2,482 props, 203 lights and 738 vehicles, every one of them
+ * two to three screen px tall. Six screen px is the legibility floor set for
+ * this pass: under it the trees stop being shapes and become texture, and the
+ * opaque park plates, the road grid and the district aprons that
+ * drawTerrainDecor already paints carry the map on their own. With the gate the
+ * same frame is 49k ops.
+ *
+ * The gate is all-or-nothing because the queue pushScenery hands back is a flat
+ * list of opaque draw closures — the engine can count them but cannot thin them
+ * by kind. Real thinning (skipping a deterministic fraction of the trees as the
+ * camera pulls back, the way a tile pyramid does) has to happen inside
+ * pushScenery in scenery.ts, which also owns the only thing left in the frame at
+ * this zoom: drawTerrainDecor's grass-tuft loop, 46.7k of the 49k ops that
+ * remain after this gate.
+ */
+const SCENERY_MIN_PX = 6;
+export const SCENERY_MIN_ZOOM = SCENERY_MIN_PX / SCENERY_TALLEST_W;
+
+/** A lamp glow has a 34 world-px radius; under this many screen px it is a haze. */
+const GLOW_MIN_PX = 6;
+export const GLOW_MIN_ZOOM = GLOW_MIN_PX / 34;
+
+/** Building labels are drawn at LABEL_PX world px, inside the camera transform. */
+const LABEL_PX = 7;
+/** Below this many screen px of label there is no text left to read. */
+const LABEL_MIN_PX = 2;
+export const LABEL_MIN_ZOOM = LABEL_MIN_PX / LABEL_PX;
+
+/**
+ * Movement constants — the three numbers the walking behaviour hangs on.
+ *
+ * ARRIVE_R is a fixed radius consumed from the agent's real position: no snap
+ * to the tile centre, and no speed-dependent threshold that can flicker a
+ * waypoint in and out as the sprite wobbles around it.
+ */
+const ARRIVE_R = 4;
+/** Below this distance to the waypoint the walk eases off instead of lurching. */
+const SLOW_R = 18;
+/** Personal space (world px): separation kicks in under this gap. */
+const SEP_R = 14;
+/** Separation is a speed, not a shove: it may add at most this many px/s. */
+const SEP_V = 48;
+/** walkPhase is distance-driven: one gait cycle per 25px actually travelled. */
+const STEP_PER_PX = 0.04;
+/** How fast velocity re-aims at the desired velocity (per-frame, ~60Hz). */
+const STEER_K = 0.22;
 
 /** The slice of a contest the renderer needs (08 §9, §10.2). */
 export interface ContestMark {
@@ -82,6 +285,8 @@ export class Xf {
   puffs: Puff[] = [];
   bubbles: SpeechBubble[] = [];
   followId: string | null = null;
+  /** Fires on every follow change; WorldCanvas forwards it to the HUD. */
+  onFollow: ((id: string | null) => void) | null = null;
   /** current Hermes Trials contest, or null on a quiet day (08 §10.1) */
   contest: ContestMark | null = null;
   private t = 0;
@@ -127,8 +332,23 @@ export class Xf {
     }
   }
 
-  setFollow(id: string | null) {
+  /**
+   * Follow mode — and the single door every release walks through: Free Cam,
+   * Escape, a pan, a zoom, a tap on open ground, the resident leaving town.
+   *
+   * Releasing stops the camera dead where the player can see it instead of
+   * letting it keep easing toward the last target, and it reports the change,
+   * so the HUD can never claim a follow the engine already dropped (or miss
+   * one it just picked up).
+   */
+  setFollow(id: string | null): void {
+    const prev = this.followId;
     this.followId = id;
+    if (id === null && prev !== null) {
+      this.cam.tx = this.cam.x;
+      this.cam.ty = this.cam.y;
+    }
+    if (prev !== id) this.onFollow?.(id);
   }
 
   /**
@@ -174,14 +394,15 @@ export class Xf {
     this.cam.ty -= dyScreen / z;
     this.cam.x = this.cam.tx;
     this.cam.y = this.cam.ty;
-    this.followId = null;
+    this.setFollow(null);
     this.clampCam();
   }
 
   /**
    * Zoom by `factor` anchored on a canvas-relative screen point: the world
-   * point under that point stays put (unless clampCam pulls it back inside the
-   * map). Applied instantly so the anchor cannot drift between zoom targets.
+   * point under that point stays put. Applied instantly so the anchor cannot
+   * drift between zoom targets. Zoom never moves the camera on its own — the
+   * anchor shifts it by however much the cursor sat off-centre, and no more.
    */
   zoomAt(sx: number, sy: number, factor: number): void {
     if (!Number.isFinite(factor) || factor <= 0) return;
@@ -199,35 +420,38 @@ export class Xf {
     cam.ty = wy - oy / z1;
     cam.x = cam.tx;
     cam.y = cam.ty;
-    this.followId = null;
+    this.setFollow(null);
     this.clampCam();
   }
 
   /**
-   * Keep the viewport over the town instead of letting it drift into empty
-   * space. When the view is wider than the world (zoomed out past the map) the
-   * camera is pinned to the world centre.
+   * The one rule the camera never breaks: its centre stays over the town.
+   *
+   * The bounds are deliberately independent of zoom. A zoom-dependent band
+   * shrinks as you zoom out, so clamping against it used to yank the camera
+   * back toward the middle of the map — measured in Chrome at 752,9 world px
+   * (2744 → 1991) panning the east edge at zoom 1 down to the old MIN_ZOOM.
+   * With fixed bounds zooming only changes what you see, never where the camera
+   * is, and a pan stops against a wall instead of springing back to a band
+   * around the centre.
+   *
+   * Keeping the centre on the map is what bounds the emptiness: at least half
+   * the viewport always shows town, and the rest is open field in the same
+   * colour as the ground. That still holds at the new MIN_ZOOM — at an 890px
+   * viewport the view is 16,274 world px wide against a 16,800px map, so even
+   * pinned to a corner at least half the screen is town.
    */
   clampCam(): void {
     const cam = this.cam;
-    const z = cam.zoom || 1;
-    const halfW = this.viewW / (2 * z);
-    const halfH = this.viewH / (2 * z);
-    const cx = this.worldW / 2;
-    const cy = this.worldH / 2;
-    const loX = Math.min(cx, halfW);
-    const hiX = Math.max(cx, this.worldW - halfW);
-    const loY = Math.min(cy, halfH);
-    const hiY = Math.max(cy, this.worldH - halfH);
-    cam.tx = Math.max(loX, Math.min(hiX, cam.tx));
-    cam.ty = Math.max(loY, Math.min(hiY, cam.ty));
-    cam.x = Math.max(loX, Math.min(hiX, cam.x));
-    cam.y = Math.max(loY, Math.min(hiY, cam.y));
+    cam.tx = Math.max(0, Math.min(this.worldW, cam.tx));
+    cam.ty = Math.max(0, Math.min(this.worldH, cam.ty));
+    cam.x = Math.max(0, Math.min(this.worldW, cam.x));
+    cam.y = Math.max(0, Math.min(this.worldH, cam.y));
   }
 
   /** Back to the town overview, follow dropped. */
   resetCam(): void {
-    this.followId = null;
+    this.setFollow(null);
     this.cam.x = this.cam.tx = CAM_HOME_X;
     this.cam.y = this.cam.ty = CAM_HOME_Y;
     this.cam.zoom = this.cam.tz = 1;
@@ -264,67 +488,60 @@ export class Xf {
     for (const a of this.byId.values()) {
       const isSleeping = a.doing === "sleep";
       const targetSpeedBase = (actSpeed[a.doing] ?? 32) * a.baseSpeed;
+      const prevX = a.x;
+      const prevY = a.y;
+
+      // Desired velocity this frame (px/s). The walk branch fills it in from
+      // the current waypoint; the idle branch below leaves it at rest, and the
+      // shared block at the end of the loop adds separation and integrates.
+      let steerX = 0;
+      let steerY = 0;
 
       if (a.path.length > 0) {
         const next = a.path[0]!;
-        // add organic wobble to target tile center
-        const wobbleX = Math.sin(this.t * 0.9 + hashId(a.id) * 0.01) * 1.8;
-        const wobbleY = Math.cos(this.t * 1.1 + hashId(a.id) * 0.013) * 1.2;
-        const tx = next.x * V + V / 2 + wobbleX;
-        const ty = next.y * V + V / 2 + wobbleY;
+        // The waypoint centre is fixed — no wobble, so the distance to it can
+        // only shrink and the arrival test cannot flicker around a threshold.
+        const tx = next.x * V + V / 2;
+        const ty = next.y * V + V / 2;
         const dx = tx - a.x;
         const dy = ty - a.y;
         const dist = Math.hypot(dx, dy);
-        // arrival slowdown
-        const slowFactor = dist < 18 ? dist / 18 : 1;
-        const jitter = 0.88 + Math.random() * 0.24; // per-frame speed variation
-        const speed = targetSpeedBase * slowFactor * jitter * dt;
 
-        if (dist < Math.max(2, speed)) {
-          a.x = tx;
-          a.y = ty;
+        if (dist < ARRIVE_R) {
+          // consume the waypoint from the agent's real position — never snap
           a.path.shift();
           // occasional dust puff when stepping
           if (Math.random() < 0.18 && targetSpeedBase > 20) {
-            this.puffs.push({ x: a.x, y: a.y + 8, vx: (Math.random() - 0.5) * 18, vy: -8 - Math.random() * 12, life: 0.42, kind: "dust" });
+            // spawn point rides with the resident: the hooves are on a.y now,
+            // so +8 would drop the dust a body-height behind them
+            this.puffs.push({ x: a.x, y: a.y + 1.5, vx: (Math.random() - 0.5) * 18 * NPC_K, vy: (-8 - Math.random() * 12) * NPC_K, life: 0.42, kind: "dust" });
           }
         } else {
-          // acceleration smoothing
-          const targetVx = (dx / dist) * targetSpeedBase;
-          const targetVy = (dy / dist) * targetSpeedBase;
-          a.vx += (targetVx - a.vx) * 0.22;
-          a.vy += (targetVy - a.vy) * 0.22;
-          // add slight perpendicular sway for organic
-          const sway = Math.sin(this.t * 2.4 + hashId(a.id) * 0.02) * 0.45;
-          const perpX = - (dy / dist) * sway;
-          const perpY = (dx / dist) * sway;
-          a.x += (a.vx * dt * 0.06 + perpX * dt);
-          a.y += (a.vy * dt * 0.06 + perpY * dt);
-          // smooth facing, hysteresis 4px
-          if (Math.abs(dx) > 3) a.facing = dx > 0 ? 1 : -1;
-          // walk phase advances by distance
-          const step = Math.hypot(a.vx, a.vy) * dt * 0.04;
-          a.walkPhase = (a.walkPhase + step) % 1;
-          // slight idle phase for breathing while moving
-          a.idlePhase += dt * 0.6;
+          // arrival slowdown + per-frame speed variation — both in px/s now
+          const slowFactor = dist < SLOW_R ? dist / SLOW_R : 1;
+          const jitter = 0.88 + Math.random() * 0.24; // per-frame speed variation
+          const speed = targetSpeedBase * slowFactor * jitter;
+          const dirX = dx / dist;
+          const dirY = dy / dist;
+          // A zero-speed act (sleep/spit/shake) holds a stale waypoint — the
+          // sway term below would still be a live velocity and make them
+          // jiggle in place all night, keeping moved > 0 so the gait animates
+          // while asleep. No speed, no steer: steerX/steerY stay at rest.
+          if (speed > 0) {
+            // slight perpendicular sway for organic — a velocity, not a position kick
+            const sway = Math.sin(this.t * 2.4 + hashId(a.id) * 0.02) * 2;
+            steerX = dirX * speed - dirY * sway;
+            steerY = dirY * speed + dirX * sway;
+            // smooth facing, hysteresis 4px
+            if (Math.abs(dx) > 3) a.facing = dx > 0 ? 1 : -1;
+            // slight idle phase for breathing while moving
+            a.idlePhase += dt * 0.6;
+          }
         }
       } else {
         // no path — autonomous idle wander if not sleeping
         if (!isSleeping) {
           a.wanderTimer -= dt;
-          // separation: push away from nearby agents if too close
-          for (const other of this.byId.values()) {
-            if (other.id === a.id) continue;
-            const dx = a.x - other.x;
-            const dy = a.y - other.y;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < 22 * 22 && d2 > 0.1) {
-              const push = 18 * dt / Math.max(1, Math.sqrt(d2));
-              a.x += dx * push * 0.08;
-              a.y += dy * push * 0.08;
-              a.vx += dx * push * 0.02;
-            }
-          }
 
           if (a.wanderTimer <= 0) {
             // pick new idle target
@@ -356,16 +573,24 @@ export class Xf {
               nx = Math.floor(a.x / V + (Math.random() - 0.5) * 2);
               ny = Math.floor(a.y / V + (Math.random() - 0.5) * 2);
             }
-            nx = Math.max(2, Math.min(207, nx));
-            ny = Math.max(2, Math.min(125, ny));
+            // Clamp to the grid, not to a remembered copy of it. This read
+            // `Math.min(207, nx)` / `Math.min(125, ny)` — the old 210x128 world.
+            // The town sits at the CENTRE of the new 1050x640 grid, so every
+            // wander target past x=207 or y=125 was snapped back to the empty
+            // north-west corner, several thousand pixels from the square. The
+            // residents were not stranded in the snapshot; they were being
+            // actively teleported there every few seconds.
+            nx = Math.max(2, Math.min(Pe - 3, nx));
+            ny = Math.max(2, Math.min(vt - 3, ny));
             const sx = Math.floor(a.x / V);
             const sy = Math.floor(a.y / V);
             if (nx !== sx || ny !== sy) {
-              const mapLike = {
-                at(_x: number, _y: number) { return 0; },
-                solid(x: number, y: number) { return x < 0 || y < 0 || x >= 210 || y >= 128; },
-              };
-              const path = pf(mapLike, sx, sy, nx, ny);
+              // the town's real collision map: buildings are solid, doors and
+              // spots are carved walkable, roads are cheap (navmap.ts)
+              const nav = navmap();
+              const from = nav.nearestWalkable(sx, sy);
+              const to = nav.nearestWalkable(nx, ny);
+              const path = pf(nav, from.x, from.y, to.x, to.y);
               // smooth: drop every other point for less grid-locked (decimate)
               const smooth = path.filter((_, i) => i % 2 === 0 || i === path.length - 1);
               if (smooth.length > 0) {
@@ -385,27 +610,58 @@ export class Xf {
               a.wanderTimer = 0.8 + Math.random();
             }
           } else {
-            // idle micro-movement: breathing sway + occasional step-in-place
+            // idle: animation phase only — an idle resident does not move.
+            // (the old breathing/fidget kicks here were position teleports:
+            // an idle agent drifted and jumped tiles over a few hundred ticks)
             a.idlePhase += dt * (0.7 + a.baseSpeed * 0.3);
-            const breathX = Math.sin(a.idlePhase * 0.9) * 0.35;
-            const breathY = Math.cos(a.idlePhase * 0.7) * 0.22;
-            a.x += breathX * dt * 0.5;
-            a.y += breathY * dt * 0.5;
-            // walkPhase still ticks slowly when idle (fidget)
-            a.walkPhase = (a.walkPhase + dt * 0.08) % 1;
-            if (Math.random() < 0.006) {
-              // tiny fidget step
-              a.x += (Math.random() - 0.5) * 4;
-              a.y += (Math.random() - 0.5) * 3;
-              a.walkPhase += 0.08;
-            }
           }
         } else {
           // sleeping: just breathing
           a.idlePhase += dt * 0.5;
-          a.x += Math.sin(a.idlePhase) * 0.04;
         }
       }
+
+      // ---- shared every-frame block: separation + integration -------------
+      // separation runs while walking too, and it is a speed (px/s), never a
+      // positional shove: the integration below is the only thing that moves
+      // an agent, so nothing can jump more than one frame of velocity.
+      if (!isSleeping) {
+        let sepX = 0;
+        let sepY = 0;
+        for (const other of this.byId.values()) {
+          if (other.id === a.id) continue;
+          const dx = a.x - other.x;
+          const dy = a.y - other.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < SEP_R * SEP_R && d2 > 0.1) {
+            const d = Math.sqrt(d2);
+            const w = (SEP_R - d) / SEP_R;
+            sepX += (dx / d) * w;
+            sepY += (dy / d) * w;
+          }
+        }
+        if (sepX || sepY) {
+          const m = Math.hypot(sepX, sepY);
+          if (m > 1) { sepX /= m; sepY /= m; }
+          steerX += sepX * SEP_V;
+          steerY += sepY * SEP_V;
+        }
+      } else {
+        a.vx = 0;
+        a.vy = 0;
+      }
+
+      // pure pos += v*dt: velocity eases toward the desired velocity, then
+      // the position advances by exactly one frame of it
+      a.vx += (steerX - a.vx) * STEER_K;
+      a.vy += (steerY - a.vy) * STEER_K;
+      a.x += a.vx * dt;
+      a.y += a.vy * dt;
+
+      // walkPhase follows the ground actually covered — it advances while the
+      // resident walks and stops the frame they stop (AC6)
+      const moved = Math.hypot(a.x - prevX, a.y - prevY);
+      if (moved > 0) a.walkPhase = (a.walkPhase + moved * STEP_PER_PX) % 1;
 
       // clamp to world
       a.x = Math.max(12, Math.min(this.worldW - 12, a.x));
@@ -433,7 +689,7 @@ export class Xf {
         this.cam.tx = f.x;
         this.cam.ty = f.y;
       } else {
-        this.followId = null; // followed agent left the herd — stop chasing
+        this.setFollow(null); // followed agent left the herd — stop chasing
       }
     }
     this.clampCam();
@@ -464,11 +720,12 @@ export class Xf {
       const ty = loc.spot[1] + Math.floor(jitterY / V);
       const sx = Math.floor(a.x / V);
       const sy = Math.floor(a.y / V);
-      const mapLike = {
-        at(_x: number, _y: number) { return 0; },
-        solid(x: number, y: number) { return x < 0 || y < 0 || x >= 210 || y >= 128; },
-      };
-      const path = pf(mapLike, sx, sy, tx, ty);
+      // the town's real collision map — same one the wander picker uses, so
+      // both pf() call sites see buildings as walls and doors as doors
+      const nav = navmap();
+      const from = nav.nearestWalkable(sx, sy);
+      const to = nav.nearestWalkable(tx, ty);
+      const path = pf(nav, from.x, from.y, to.x, to.y);
       // smooth path: keep first, decimate middle, keep last
       const smooth = path.length > 6 ? path.filter((_, i) => i % 2 === 0 || i === path.length - 1) : path;
       a.path = smooth;
@@ -492,7 +749,9 @@ export class Xf {
     attacker.path = [];
     attacker.vx = attacker.facing * 8;
     setTimeout(() => {
-      this.puffs.push({ x: attacker.x + attacker.facing * 22, y: attacker.y - 26, vx: attacker.facing * 140, vy: -30, life: 0.8, kind: "spit" });
+      // launched from head height and scaled like the sprite: the old offsets
+      // were tuned for a 63px figure and would fire over the roofline now
+      this.puffs.push({ x: attacker.x + attacker.facing * 22 * NPC_K, y: attacker.y - 26 * NPC_K, vx: attacker.facing * 140 * NPC_K, vy: -30 * NPC_K, life: 0.8, kind: "spit" });
       victim.doing = "shake";
       victim.path = [];
       victim.mood -= 0.6;
@@ -561,6 +820,15 @@ export class Xf {
 
   draw(ctx: CanvasRenderingContext2D, viewportW: number, viewportH: number): void {
     const cam = this.cam;
+    // which level of detail this frame is drawn at, read once so every gate
+    // below and the night's lamp pass agree on it
+    const z = cam.zoom;
+    const lod = {
+      scenery: z >= SCENERY_MIN_ZOOM,
+      residents: z >= NPC_MIN_ZOOM,
+      labels: z >= LABEL_MIN_ZOOM,
+      glows: z >= GLOW_MIN_ZOOM,
+    };
     ctx.save();
     ctx.clearRect(0, 0, viewportW, viewportH);
     ctx.translate(viewportW / 2, viewportH / 2);
@@ -587,7 +855,7 @@ export class Xf {
     const viewTop0 = cam.y - viewportH / 2 / cam.zoom - 120;
     const viewBottom0 = cam.y + viewportH / 2 / cam.zoom + 120;
     const sceneDraw: SceneDraw = { isDark: isDarkTheme, night: this.nightIntensity(), time: this.t };
-    const sceneView: View = { l: viewLeft0, r: viewRight0, t: viewTop0, b: viewBottom0 };
+    const sceneView: View = { l: viewLeft0, r: viewRight0, t: viewTop0, b: viewBottom0, zoom: cam.zoom };
     drawTerrainDecor(ctx, sceneView, sceneDraw);
 
     ctx.strokeStyle = isDarkTheme ? "#2e2a25" : "#d8c9a8";
@@ -609,7 +877,7 @@ export class Xf {
     const viewBottom = cam.y + viewportH / 2 / cam.zoom + 120;
 
     // trees, street furniture, vehicles — pushed first so buildings/agents win ties
-    pushScenery(queue, ctx, sceneView, sceneDraw);
+    if (lod.scenery) pushScenery(queue, ctx, sceneView, sceneDraw);
 
     for (const b of LOCATIONS) {
       const bx = b.x * V, by = b.y * V, bw = b.w * V, bh = b.h * V;
@@ -680,13 +948,16 @@ export class Xf {
               ctx.strokeRect(bx, by, bw, bh);
             }
             ctx.restore();
-            // label
-            ctx.fillStyle = isDarkTheme ? "#a49c90" : "#1b1915";
-            ctx.font = "7px JetBrains Mono";
-            ctx.textAlign = "center";
-            ctx.globalAlpha = 0.85;
-            ctx.fillText(b.name.replace("The ", ""), bx + bw / 2, by + bh + 10);
-            ctx.globalAlpha = 1;
+            // label — 7px inside the camera transform, so below LABEL_MIN_ZOOM
+            // it is under 2 screen px and the shaping cost buys nothing
+            if (lod.labels) {
+              ctx.fillStyle = isDarkTheme ? "#a49c90" : "#1b1915";
+              ctx.font = `${LABEL_PX}px JetBrains Mono`;
+              ctx.textAlign = "center";
+              ctx.globalAlpha = 0.85;
+              ctx.fillText(b.name.replace("The ", ""), bx + bw / 2, by + bh + 10);
+              ctx.globalAlpha = 1;
+            }
           },
         });
         continue;
@@ -699,34 +970,14 @@ export class Xf {
           ctx.fillStyle = "rgba(0,0,0,0.10)";
           ctx.fillRect(bx + 5, by + 5, bw, bh);
           const isDark = isDarkTheme || this.nightIntensity() > 0.5;
-          // per-category palette
-          let wall = isDarkTheme ? "#2a2622" : "#e8ddd0";
-          let roof = isDarkTheme ? "#6b4a35" : "#8b5a3c";
-          let trim = isDarkTheme ? "#3a3530" : "#1b1915";
-          let wood = isDarkTheme ? "#3d2f1e" : "#c9a86a";
-          if (b.category === "Social") {
-            // tavern/baths/square/fire/dock — warm wood + open porch
-            wall = isDarkTheme ? "#2e2418" : "#efe6d5";
-            roof = isDarkTheme ? "#7a4a2e" : "#a66a3a";
-            trim = isDarkTheme ? "#4a3a28" : "#5a3a1e";
-          } else if (b.category === "Civic") {
-            // hall/vault/station/board/booth — stone formal, columns
-            wall = isDarkTheme ? "#2c2e30" : "#e6e2dd";
-            roof = isDarkTheme ? "#4a4a4e" : "#6b6a6e";
-            trim = isDarkTheme ? "#3a3a3e" : "#2b2a2e";
-          } else if (b.category === "Work") {
-            // market/press/bank/library/clinic/school/post/shed/mill — brick/industrial
-            wall = isDarkTheme ? "#2f2520" : "#e8d5c0";
-            roof = isDarkTheme ? "#5a3a28" : "#9a6a3a";
-            trim = isDarkTheme ? "#4a3a2e" : "#3d2a18";
-          } else if (b.category === "Rest") {
-            // barn/pens — barn red + gambrel
-            wall = isDarkTheme ? "#3a1e1a" : "#b54a3a";
-            roof = isDarkTheme ? "#4a2a24" : "#7a2e22";
-            trim = isDarkTheme ? "#5a3028" : "#4a1e14";
-            wood = isDarkTheme ? "#4a3a2a" : "#d8c9a8";
-          }
-          if (isDark && !isDarkTheme) wall = isDarkTheme ? wall : "#5a4a3a";
+          // per-category palette, one table per theme (see BUILD_INK)
+          const inkTable = isDarkTheme ? BUILD_INK.dark : BUILD_INK.light;
+          const ink = inkTable[b.category] ?? inkTable.base!;
+          const roof = ink.roof;
+          const trim = ink.trim;
+          const wood = ink.wood;
+          // night inside the light theme darkens the walls without swapping palette
+          let wall = isDark && !isDarkTheme ? "#5a4a3a" : ink.wall;
           // wall
           ctx.fillStyle = wall;
           ctx.fillRect(bx, by, bw, bh);
@@ -774,6 +1025,55 @@ export class Xf {
             for (let a = 0; a < 4; a++) { const ang = (a * Math.PI / 2); ctx.beginPath(); ctx.moveTo(bx + bw + 6, by + bh / 2); ctx.lineTo(bx + bw + 6 + Math.cos(ang) * 10, by + bh / 2 + Math.sin(ang) * 10); ctx.stroke(); }
           } else if (b.id === "shed") {
             ctx.fillStyle = wood; for (let fx = bx + 4; fx < bx + bw - 4; fx += 6) ctx.fillRect(fx, by + 4, 2, bh - 8);
+          } else if (b.id === "depot" || b.id === "garage") {
+            // cargo doors + dock stripe
+            ctx.fillStyle = isDarkTheme ? "#3a3a3e" : "#4a443c";
+            ctx.fillRect(bx + 6, by + 8, bw - 12, bh - 16);
+            ctx.fillStyle = isDarkTheme ? "#c9a86a" : "#e8b83a";
+            ctx.fillRect(bx + 6, by + bh - 12, bw - 12, 2);
+            ctx.strokeStyle = isDarkTheme ? "#5c5850" : "#8a857c"; ctx.lineWidth = 0.8;
+            ctx.strokeRect(bx + 6, by + 8, bw - 12, bh - 16);
+          } else if (b.id === "tower") {
+            // belfry arch + bell
+            ctx.fillStyle = isDarkTheme ? "#1e1a18" : "#2b2118";
+            ctx.beginPath(); ctx.arc(bx + bw / 2, by + 10, 5, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = isDarkTheme ? "#c9a86a" : "#e8b83a";
+            ctx.beginPath(); ctx.arc(bx + bw / 2, by + 10, 2.5, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = trim; ctx.fillRect(bx, by + 16, bw, 2);
+          } else if (b.id === "arcade") {
+            // marquee lights
+            ctx.fillStyle = isDarkTheme ? "#c9a86a" : "#b83a2e";
+            ctx.fillRect(bx + 2, by + 2, bw - 4, 5);
+            ctx.fillStyle = isDarkTheme ? "#ffe9a8" : "#ffe9a8";
+            for (let lx = bx + 5; lx < bx + bw - 3; lx += 7) ctx.fillRect(lx, by + 3.5, 2, 2);
+          } else if (b.id === "forge") {
+            // chimney + ember glow
+            ctx.fillStyle = isDarkTheme ? "#3a3530" : "#5a4a3a";
+            ctx.fillRect(bx + bw - 14, by - 8, 8, 12);
+            ctx.fillStyle = "rgba(255,120,40,0.8)";
+            ctx.fillRect(bx + bw - 12, by - 6, 4, 4);
+            ctx.fillStyle = isDarkTheme ? "#2e2018" : "#3d2a18";
+            ctx.fillRect(bx + 6, by + 8, bw - 20, bh - 16);
+          } else if (b.id === "lodge") {
+            // antler mount + porch beam
+            ctx.strokeStyle = isDarkTheme ? "#8a7a5a" : "#7a5a34"; ctx.lineWidth = 1.2;
+            ctx.beginPath(); ctx.moveTo(bx + bw / 2 - 4, by + 8); ctx.lineTo(bx + bw / 2, by + 4); ctx.lineTo(bx + bw / 2 + 4, by + 8); ctx.stroke();
+            ctx.fillStyle = wood; ctx.fillRect(bx + 2, by + bh - 6, bw - 4, 3);
+          } else if (b.id === "observatory") {
+            // dome + slit
+            ctx.fillStyle = isDarkTheme ? "#3d5566" : "#7fa8c4";
+            ctx.beginPath(); ctx.arc(bx + bw / 2, by + 2, bw / 2 - 4, Math.PI, 0); ctx.fill();
+            ctx.fillStyle = isDarkTheme ? "#1e1a18" : "#2b2a26";
+            ctx.fillRect(bx + bw / 2 - 2, by - 8, 4, 12);
+          } else if (b.id === "exchange") {
+            // ticker band + columns
+            ctx.fillStyle = isDarkTheme ? "#1e2e22" : "#2e5a32";
+            ctx.fillRect(bx + 3, by + 3, bw - 6, 7);
+            ctx.fillStyle = isDarkTheme ? "#7ec46a" : "#d8f0c8";
+            for (let tx = 0; tx < 3; tx++) ctx.fillRect(bx + 6 + tx * ((bw - 12) / 3), by + 5, (bw - 12) / 3 - 3, 3);
+            ctx.fillStyle = isDarkTheme ? "#d8d2c6" : "#f4f1ea";
+            ctx.fillRect(bx + 6, by + 14, 3, bh - 22);
+            ctx.fillRect(bx + bw - 9, by + 14, 3, bh - 22);
           }
           // windows — night glow
           if (this.nightIntensity() > 0.18) {
@@ -792,18 +1092,20 @@ export class Xf {
           ctx.fillStyle = isDarkTheme ? "#1e1a18" : "#2b2118";
           ctx.fillRect(bx + bw / 2 - 5, by + bh - 10, 10, 10);
           ctx.fillStyle = "rgba(201,168,106,0.9)"; ctx.fillRect(bx + bw / 2 + 2, by + bh - 6, 1.2, 1.2);
-          // label
-          ctx.fillStyle = isDarkTheme ? "#a49c90" : "#1b1915";
-          ctx.font = "7px JetBrains Mono";
-          ctx.textAlign = "center";
-          ctx.globalAlpha = 0.9;
-          // strip behind label
-          ctx.fillStyle = isDarkTheme ? "rgba(28,26,24,0.92)" : "rgba(244,241,234,0.92)";
-          const lblW = b.name.length * 4.2 + 8;
-          ctx.fillRect(bx + bw / 2 - lblW / 2, by + bh + 2, lblW, 9);
-          ctx.fillStyle = isDarkTheme ? "#d8d2c6" : "#1b1915";
-          ctx.fillText(b.name.replace("The ", ""), bx + bw / 2, by + bh + 9);
-          ctx.globalAlpha = 1;
+          // label — same screen-size floor as the terrain labels above
+          if (lod.labels) {
+            ctx.fillStyle = isDarkTheme ? "#a49c90" : "#1b1915";
+            ctx.font = `${LABEL_PX}px JetBrains Mono`;
+            ctx.textAlign = "center";
+            ctx.globalAlpha = 0.9;
+            // strip behind label
+            ctx.fillStyle = isDarkTheme ? "rgba(28,26,24,0.92)" : "rgba(244,241,234,0.92)";
+            const lblW = b.name.length * 4.2 + 8;
+            ctx.fillRect(bx + bw / 2 - lblW / 2, by + bh + 2, lblW, 9);
+            ctx.fillStyle = isDarkTheme ? "#d8d2c6" : "#1b1915";
+            ctx.fillText(b.name.replace("The ", ""), bx + bw / 2, by + bh + 9);
+            ctx.globalAlpha = 1;
+          }
           ctx.restore();
         },
       });
@@ -811,6 +1113,14 @@ export class Xf {
 
     for (const a of this.byId.values()) {
       if (a.x < viewLeft || a.x > viewRight || a.y < viewTop || a.y > viewBottom) continue;
+      // Level of detail on the residents. Below NPC_MIN_ZOOM a resident is
+      // under 1.5 screen px, so the sprite cannot be seen — but the blit is the
+      // most expensive thing the engine does per object: a fresh offscreen
+      // canvas, a 52x58 ImageData and a 3,016-iteration pixel loop, per
+      // resident, per frame. The followed resident is exempt, the same rule the
+      // name tags use: it is the one figure the player is actually tracking, and
+      // losing it in follow mode is worse than the cost.
+      if (!lod.residents && a.id !== this.followId) continue;
       queue.push({
         y: a.y,
         draw: () => {
@@ -818,11 +1128,12 @@ export class Xf {
           // walkPhase is now maintained per-agent, not global t
           const walkPhase = a.walkPhase % 1;
           const sk = sf({ t: this.t + hashId(a.id) * 0.01, walkPhase, doing: a.doing, facing: a.facing });
-          const shake = a.doing === "shake" ? Math.sin(this.t * 38 + hashId(a.id)) * 2.2 : 0;
+          const shake = a.doing === "shake" ? Math.sin(this.t * 38 + hashId(a.id)) * Math.max(0.6, 2.2 * NPC_K) : 0;
           const idleBob = Math.sin(a.idlePhase * 0.9) * 0.6;
           const speedBob = a.path.length > 0 ? Math.abs(Math.sin(walkPhase * Math.PI * 2)) * 1.0 : 0;
           const buf = renderLlama(genes, sk);
-          const scale = 1.4;
+          // NPC_H/NPC_GROUND_ROW → town-median-derived resident, still 1/3 car
+          const scale = NPC_SCALE;
           const w = BUF_W * scale;
           const h = BUF_H * scale;
           const off = document.createElement("canvas");
@@ -848,13 +1159,16 @@ export class Xf {
           const stretch = a.path.length > 0 ? 1 + Math.sin(walkPhase * Math.PI * 2) * 0.035 : 1;
           const squash = a.path.length > 0 ? 1 - Math.sin(walkPhase * Math.PI * 2) * 0.02 : 1;
           ctx.scale(a.facing === -1 ? -stretch : stretch, squash);
-          ctx.drawImage(off, -w / 2, -h + 12, w, h);
+          // -NPC_H puts buffer row NPC_GROUND_ROW (the hooves) on the anchor,
+          // so the resident stands on its path point instead of floating
+          ctx.drawImage(off, -w / 2, -NPC_H, w, h);
           ctx.restore();
 
-          // shadow ellipse
+          // shadow ellipse — same ground line as the hooves, same ratio to the
+          // body as the old 63px sprite (radius = 8.4 buffer px)
           ctx.fillStyle = "rgba(0,0,0,0.13)";
           ctx.beginPath();
-          ctx.ellipse(a.x, a.y + 6, 14 * scale * 0.6, 5 * scale * 0.5, 0, 0, Math.PI * 2);
+          ctx.ellipse(a.x, a.y + 1, 14 * scale * 0.6, 5 * scale * 0.5, 0, 0, Math.PI * 2);
           ctx.fill();
 
           // 08 §10.2 — a coloured ring under every contestant, so the roster is
@@ -862,12 +1176,14 @@ export class Xf {
           const ringCol = this.contestColor(a.id);
           if (ringCol) {
             ctx.strokeStyle = ringCol;
-            ctx.lineWidth = 2.2;
+            ctx.lineWidth = 1.4;
             ctx.globalAlpha = this.contest?.state === "live"
               ? 0.7 + 0.3 * Math.sin(this.t * 5 + hashId(a.id) * 0.01)
               : 0.9;
             ctx.beginPath();
-            ctx.ellipse(a.x, a.y + 7, 17, 6.5, 0, 0, Math.PI * 2);
+            // framed to the resident, not to the map — it has to read as a ring
+            // around an NPC_H-tall figure rather than a hoop three residents wide
+            ctx.ellipse(a.x, a.y + NPC_H * 0.2, NPC_H * 0.6, NPC_H * 0.24, 0, 0, Math.PI * 2);
             ctx.stroke();
             ctx.globalAlpha = 1;
           }
@@ -875,17 +1191,30 @@ export class Xf {
           ctx.save();
           ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
           const sx = (a.x - cam.x) * cam.zoom + viewportW / 2;
-          const sy = (a.y - 56 * scale - cam.y) * cam.zoom + viewportH / 2 + idleBob * cam.zoom * 0.3;
-          ctx.font = "10px JetBrains Mono";
+          // name tag: bottom 5px above the crown, box sized to the figure —
+          // a 14px box was taller than the resident once the sprite shrank
+          const sy = (a.y - (NPC_H + 5) - cam.y) * cam.zoom + viewportH / 2 + idleBob * cam.zoom * 0.3;
+          // Pulled back past a readable zoom. The tag is a fixed 8 screen px, so
+          // it does NOT shrink with the world — at MIN_ZOOM (0.0547) it is 14x
+          // the height of the resident it names, and 64 of them turned the
+          // whole town into an unreadable stack of white boxes. The followed
+          // resident keeps their tag at any zoom, because that is the one the
+          // player is actually tracking; everyone else fades in as you come
+          // closer.
+          if (cam.zoom < TAG_MIN_ZOOM && a.id !== this.followId) {
+            ctx.restore();
+            return;
+          }
+          ctx.font = "8px JetBrains Mono";
           ctx.textAlign = "center";
-          const labelBgW = a.name.length * 6 + 8;
+          const labelBgW = a.name.length * 4.8 + 7;
           ctx.fillStyle = "rgba(244,241,234,0.92)";
-          ctx.fillRect(sx - labelBgW / 2, sy - 14, labelBgW, 14);
+          ctx.fillRect(sx - labelBgW / 2, sy - 11, labelBgW, 11);
           ctx.strokeStyle = "#1b1915";
           ctx.lineWidth = 0.5;
-          ctx.strokeRect(sx - labelBgW / 2, sy - 14, labelBgW, 14);
+          ctx.strokeRect(sx - labelBgW / 2, sy - 11, labelBgW, 11);
           ctx.fillStyle = this.tagColor(a.id);
-          ctx.fillText(a.name, sx, sy - 4);
+          ctx.fillText(a.name, sx, sy - 3);
           ctx.restore();
         },
       });
@@ -900,7 +1229,9 @@ export class Xf {
 
     for (const p of this.puffs) {
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.kind === "spit" ? 4 : 3, 0, Math.PI * 2);
+      // 4/3px were sized for a 63px figure — on a 10px one a 4px ball would be
+      // bigger than its head, so keep them small but still on-screen
+      ctx.arc(p.x, p.y, p.kind === "spit" ? 1.4 : 1, 0, Math.PI * 2);
       ctx.fillStyle = p.kind === "spit" ? "#cfe8f2" : "rgba(200,180,150,0.7)";
       ctx.fill();
       ctx.strokeStyle = "rgba(27,25,21,0.15)";
@@ -908,16 +1239,20 @@ export class Xf {
       ctx.stroke();
     }
 
-    const sortedBubbles = [...this.bubbles].sort((a, b) => {
+    // a bubble is drawn in world px, so it shrinks with the camera and at
+    // NPC_MIN_ZOOM it is a 6px smudge with unreadable text — and the resident it
+    // belongs to is no longer drawn either. Same floor as the sprite.
+    const sortedBubbles = lod.residents ? [...this.bubbles].sort((a, b) => {
       if (a.by === this.followId) return -1;
       if (b.by === this.followId) return 1;
       return b.until - a.until;
-    });
+    }) : [];
     for (const bub of sortedBubbles.slice(0, 3)) {
       const ag = this.byId.get(bub.by);
       if (!ag) continue;
       const sx = ag.x;
-      const sy = ag.y - 62 - Math.sin(ag.idlePhase * 0.8) * 1.2;
+      // box bottom + its 8px tail: the tip lands on the crown (a.y - NPC_H)
+      const sy = ag.y - NPC_H - 8 - Math.sin(ag.idlePhase * 0.8) * 1.2;
       const pad = 6;
       ctx.font = "11px Instrument Serif";
       const metrics = ctx.measureText(bub.text);
@@ -956,36 +1291,44 @@ export class Xf {
     if (night > 0.01) {
       ctx.fillStyle = `rgba(22, 28, 60, ${night * 0.5})`;
       ctx.fillRect(0, 0, viewportW, viewportH);
-      ctx.globalCompositeOperation = "lighter";
-      const spots: Array<[number, number]> = [
-        [104, 62], [120, 66], [110, 84], [72, 50],
-      ];
-      for (const [tx, ty] of spots) {
-        const sx = (tx * V - cam.x) * cam.zoom + viewportW / 2;
-        const sy = (ty * V - cam.y) * cam.zoom + viewportH / 2;
-        const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, 44 * cam.zoom);
-        grad.addColorStop(0, `rgba(255, 220, 120, ${0.38 * night})`);
-        grad.addColorStop(1, "rgba(255, 220, 120, 0)");
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(sx, sy, 44 * cam.zoom, 0, Math.PI * 2);
-        ctx.fill();
+      // The lamp pools are the most expensive thing in the frame: each one is a
+      // fresh radial gradient plus an arc fill, and at the whole-town zoom all
+      // 2,400 of them are in view — 2,404 gradient objects a frame (738 of them
+      // are vehicle headlights). Below GLOW_MIN_ZOOM a pool is a 1.9px dot, so
+      // the whole per-lamp pass goes and the night reads as unlit streets, which
+      // is what 2,400 sub-pixel dots add up to anyway.
+      if (lod.glows) {
+        ctx.globalCompositeOperation = "lighter";
+        const spots: Array<[number, number]> = [
+          [104, 62], [120, 66], [110, 84], [72, 50],
+        ];
+        for (const [tx, ty] of spots) {
+          const sx = (tx * V - cam.x) * cam.zoom + viewportW / 2;
+          const sy = (ty * V - cam.y) * cam.zoom + viewportH / 2;
+          const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, 44 * cam.zoom);
+          grad.addColorStop(0, `rgba(255, 220, 120, ${0.38 * night})`);
+          grad.addColorStop(1, "rgba(255, 220, 120, 0)");
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(sx, sy, 44 * cam.zoom, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // street lamps
+        for (const g of LAMP_GLOWS) {
+          if (g.x < viewLeft || g.x > viewRight || g.y < viewTop || g.y > viewBottom) continue;
+          const sx = (g.x - cam.x) * cam.zoom + viewportW / 2;
+          const sy = (g.y - cam.y) * cam.zoom + viewportH / 2;
+          const r = 34 * cam.zoom;
+          const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
+          grad.addColorStop(0, `rgba(255, 224, 140, ${0.42 * night})`);
+          grad.addColorStop(1, "rgba(255, 224, 140, 0)");
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(sx, sy, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalCompositeOperation = "source-over";
       }
-      // street lamps
-      for (const g of LAMP_GLOWS) {
-        if (g.x < viewLeft || g.x > viewRight || g.y < viewTop || g.y > viewBottom) continue;
-        const sx = (g.x - cam.x) * cam.zoom + viewportW / 2;
-        const sy = (g.y - cam.y) * cam.zoom + viewportH / 2;
-        const r = 34 * cam.zoom;
-        const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
-        grad.addColorStop(0, `rgba(255, 224, 140, ${0.42 * night})`);
-        grad.addColorStop(1, "rgba(255, 224, 140, 0)");
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(sx, sy, r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalCompositeOperation = "source-over";
     }
   }
 }

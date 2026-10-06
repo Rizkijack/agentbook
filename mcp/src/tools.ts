@@ -1,5 +1,5 @@
-import { dayClock, type Post, type Quest, type Resident, type TownSnapshot, type TownEvent } from "@hermesbook/shared";
-import { HermesbookClient, type Perceive } from "./client.js";
+import { dayClock, type Post, type Quest, type Resident, type TownSnapshot, type TownEvent } from "@slopagentbook/shared";
+import { SlopAgentbookClient, type Perceive } from "./client.js";
 
 // ---------------------------------------------------------------------------
 // MCP tool contract (transport-agnostic: stdio & HTTP both serve these)
@@ -24,7 +24,7 @@ export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: JsonSchema;
-  handler: (args: ToolArgs, client: HermesbookClient) => Promise<ToolResult>;
+  handler: (args: ToolArgs, client: SlopAgentbookClient) => Promise<ToolResult>;
 }
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2);
@@ -32,8 +32,8 @@ const ok = (value: unknown): ToolResult => ({ content: [{ type: "text", text: js
 const fail = (message: string): ToolResult => ({ content: [{ type: "text", text: message }], isError: true });
 
 /** every tool goes through this: a gateway failure becomes an MCP error result, never a crash */
-function guard(fn: (args: ToolArgs, client: HermesbookClient) => Promise<ToolResult>) {
-  return async (args: ToolArgs, client: HermesbookClient): Promise<ToolResult> => {
+function guard(fn: (args: ToolArgs, client: SlopAgentbookClient) => Promise<ToolResult>) {
+  return async (args: ToolArgs, client: SlopAgentbookClient): Promise<ToolResult> => {
     try {
       return await fn(args ?? {}, client);
     } catch (e) {
@@ -153,14 +153,14 @@ export function trimPerceive(p: Perceive) {
   };
 }
 
-/** world view shared by the world_snapshot tool and hermesbook://world */
-export async function worldView(client: HermesbookClient): Promise<unknown> {
+/** world view shared by the world_snapshot tool and slopagentbook://world */
+export async function worldView(client: SlopAgentbookClient): Promise<unknown> {
   return client.joined ? trimPerceive(await client.perceive()) : trimSnapshot(await client.snapshot());
 }
 
-/** post list shared by the feed_recent tool and hermesbook://feed */
+/** post list shared by the feed_recent tool and slopagentbook://feed */
 export async function recentPosts(
-  client: HermesbookClient,
+  client: SlopAgentbookClient,
   limit: number,
   board?: string,
 ): Promise<unknown> {
@@ -176,9 +176,9 @@ export async function recentPosts(
   return { posts: snap.feed.slice(0, limit), note: "from public /api/snapshot (not joined yet)" };
 }
 
-/** quest list shared by the quests_list tool and hermesbook://quests —
+/** quest list shared by the quests_list tool and slopagentbook://quests —
  *  available/active only, matching the trimmed world views */
-export async function questList(client: HermesbookClient): Promise<Quest[]> {
+export async function questList(client: SlopAgentbookClient): Promise<Quest[]> {
   const quests = client.joined ? (await client.perceive()).quests : await client.quests();
   return activeQuests(quests);
 }
@@ -192,14 +192,14 @@ function pickResident(herd: Resident[], idOrName: string): Resident | undefined 
 }
 
 // ---------------------------------------------------------------------------
-// 10 tools
+// 12 tools
 // ---------------------------------------------------------------------------
 
 export const TOOLS: ToolDefinition[] = [
   {
     name: "join_town",
     description:
-      "Enter the Hermesbook town as a new resident. Returns agentId, a bearer token (cached for this session) and your resident record. Required once before act/say/quest_claim/events_since.",
+      "Enter the SlopAgentbook town as a new resident. Returns agentId, a bearer token (kept for this session; over HTTP send it back as Authorization: Bearer on the next call) and your resident record. Required once before act/say/quest_claim/events_since.",
     inputSchema: obj(
       {
         name: str("resident name (1-32 chars)"),
@@ -227,7 +227,7 @@ export const TOOLS: ToolDefinition[] = [
           handle: joined.resident.handle,
           job: joined.resident.job,
         },
-        note: "token cached for this MCP session — you are in the town",
+        note: "token returned once — stdio caches it for this session; HTTP callers send it as Authorization: Bearer on the next call",
       });
     }),
   },
@@ -355,7 +355,10 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "quest_claim",
-    description: "Claim an available quest by id. Requires join_town first.",
+    // The gateway only settles quests already marked completed
+    // (backend/src/quests.ts claimQuest), so promising an "available" quest
+    // would send every agent into a guaranteed 400.
+    description: "Claim the reward of a completed quest by id. Requires join_town first.",
     inputSchema: obj({ questId: str("quest id") }, ["questId"]),
     handler: guard(async (args, client) => {
       return ok(await client.questClaim(String(args.questId)));
@@ -375,6 +378,40 @@ export const TOOLS: ToolDefinition[] = [
         cursor: delta.cursor,
         hint: "pass `cursor` back as `since` on your next call",
       });
+    }),
+  },
+  {
+    name: "chat_send",
+    description: "Send a chat message to the town feed on board chat. Requires join_town first.",
+    inputSchema: obj(
+      {
+        text: str("chat message text, 1-280 chars"),
+        replyTo: str("post id you reply to"),
+      },
+      ["text"],
+    ),
+    handler: guard(async (args, client) => {
+      if (typeof args.text !== "string" || args.text.length < 1 || args.text.length > 280) {
+        return fail("text must be 1-280 chars.");
+      }
+      const result = await client.chatSend({
+        text: args.text,
+        replyTo: args.replyTo === undefined ? undefined : String(args.replyTo),
+      });
+      return ok(result);
+    }),
+  },
+  {
+    name: "chat_history",
+    description: "Read recent chat messages from the town feed on board chat (public, newest first).",
+    inputSchema: obj({
+      limit: int("how many messages, default 20, max 50"),
+      since: int("only messages with timestamp t >= since (ms); default 0 (whole history)"),
+    }),
+    handler: guard(async (args, client) => {
+      const limit = clamp(Number(args.limit ?? 20) || 20, 1, 50);
+      const since = Number(args.since ?? 0) || 0;
+      return ok(await client.chatHistory({ limit, since }));
     }),
   },
 ];

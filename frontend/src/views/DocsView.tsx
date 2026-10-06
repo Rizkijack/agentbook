@@ -1,5 +1,7 @@
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot } from "@slopagentbook/shared";
 import { useEffect, useState } from "react";
+import { Pe, vt, WorldWidth, WorldHeight } from "../canvas/constants.js";
+import { LOCATIONS } from "../canvas/locationsData.js";
 
 export function DocsView({ snapshot }: { snapshot: TownSnapshot }) {
   const [status, setStatus] = useState<{ brain: string; herd: number; feed: number; spend: { cap: number; usd: number; calls: number }; llm: { failures: number; lastError: string | null } } | null>(null);
@@ -44,7 +46,7 @@ export function DocsView({ snapshot }: { snapshot: TownSnapshot }) {
         </section>
         <section className="card">
           <h3 style={{ margin: 0 }}>5 — Grid & Tilemap</h3>
-          <p className="mono" style={{ fontSize: 12, lineHeight: 1.6, color: "#3f3a33" }}>210×128 tiles ×16px = 3360×2048 px. Seeded PRNG df(20260921). Tile 0 grass, 1 hill, 2 road, 3 path, 11 stone. 26 POIs catalog _n.</p>
+          <p className="mono" style={{ fontSize: 12, lineHeight: 1.6, color: "#3f3a33" }}>{Pe}×{vt} tiles ×16px = {WorldWidth}×{WorldHeight} px. Seeded PRNG df(20260921). Tile 0 grass, 1 hill, 2 road, 3 path, 11 stone. {LOCATIONS.length} POIs catalog _n.</p>
         </section>
         <section className="card">
           <h3 style={{ margin: 0 }}>6 — Pathfinding A*</h3>
@@ -64,11 +66,11 @@ export function DocsView({ snapshot }: { snapshot: TownSnapshot }) {
         </section>
         <section className="card">
           <h3 style={{ margin: 0 }}>10 — API & SSE</h3>
-          <p className="mono" style={{ fontSize: 12, lineHeight: 1.6, color: "#3f3a33" }}>GET /api/snapshot (full), GET /api/stream (SSE : open then order/post/llama/herd/edition/event/spit/config), POST /api/fork (validates maxHerd 64, parent, name unique, bio 180, traits 3, rate-limit, atomic flush), GET /api/treasury (60s cache), GET /api/status (spend, llm). Agent gateway: POST /api/agent/join|resume|act|say|quests/:id/claim (Bearer hbk_ token), GET /api/agent/me|perceive|events. Public BBS: GET /api/boards, /api/boards/:id. Client handshake pendingEventsQueue.</p>
+          <p className="mono" style={{ fontSize: 12, lineHeight: 1.6, color: "#3f3a33" }}>GET /api/snapshot (full), GET /api/stream (SSE : open then order/post/llama/herd/edition/event/spit/config), POST /api/fork (validates maxHerd 64, parent, name unique, bio 180, traits 3, rate-limit, atomic flush), GET /api/treasury (60s cache), GET /api/status (spend, llm). Agent gateway: POST /api/agent/join|resume|act|say|quests/:id/claim (Bearer sabk_ token), GET /api/agent/me|perceive|events. Public BBS: GET /api/boards, /api/boards/:id. Client handshake pendingEventsQueue.</p>
         </section>
       </div>
 
-      <div className="mono faint" style={{ fontSize: 10, textAlign: "center" }}>Source: reverse engineering of tryllamabook.com — 5 docs · Hermesbook adaptation adds Base EVM + Hermes sprites.</div>
+      <div className="mono faint" style={{ fontSize: 10, textAlign: "center" }}>Source: reverse engineering of tryllamabook.com — 5 docs · SlopAgentbook adaptation adds Base EVM + Hermes sprites.</div>
     </div>
   );
 }

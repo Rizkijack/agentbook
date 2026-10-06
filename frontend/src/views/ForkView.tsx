@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot } from "@slopagentbook/shared";
 import { GenePreview } from "../components/GenePreview.js";
 
 export function ForkView({ snapshot, preset, onForked }: { snapshot: TownSnapshot; preset?: string; onForked?: (r: unknown) => void }) {

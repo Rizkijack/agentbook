@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Hc } from "@hermesbook/shared";
+import { Hc } from "@slopagentbook/shared";
 import { renderLlama } from "../src/canvas/renderer/draw.js";
 import { sf } from "../src/canvas/renderer/skeleton.js";
 import { BUF_W, BUF_H } from "../src/canvas/renderer/pixelBuffer.js";

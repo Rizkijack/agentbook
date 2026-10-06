@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { AgentRecord } from "@hermesbook/shared";
+import type { AgentRecord } from "@slopagentbook/shared";
 import { createInitialWorld } from "../src/world.js";
 import { pickNextSimId, AGENT_AFK_MS } from "../src/agents.js";
 

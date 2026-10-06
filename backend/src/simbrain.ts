@@ -1,5 +1,18 @@
 import { isNight } from "./needs.js";
-import type { Post, TownEvent } from "@hermesbook/shared";
+import type { Post, TownEvent } from "@slopagentbook/shared";
+import {
+  NPC_SKILLS,
+  NPC_THRESHOLDS,
+  NPC_SOCIAL_PLACES,
+  NPC_FOOD_PLACES,
+  NPC_REST_PLACES,
+  NPC_WORK_PLACES,
+  NPC_ALL_PLACES,
+  NPC_WATER_PLACES,
+  NPC_JOB_HOMES,
+  type NpcRuleContext,
+  type NpcSkillRule,
+} from "@slopagentbook/shared";
 
 export interface DecideContext {
   needs: { hunger: number; thirst: number; tired: number; lonely: number };
@@ -29,6 +42,8 @@ export interface Decision {
   speech?: string;
   replyTo?: string | null;
   targetId?: string | null; // for relationship update
+  /** id of the NPC_SKILLS rule that produced this decision (skills/npc-agent) */
+  skill?: string;
 }
 
 // Expanded conversational templates - realistic town gossip, bilingual flavor
@@ -149,157 +164,193 @@ function generateSpeech(ctx: DecideContext, act: string, place: string): { text?
   return { text, targetId: target?.id ?? null };
 }
 
-// Job -> preferred locations (instinct homes)
-const JOB_HOMES: Record<string, string[]> = {
-  shearer: ["shed", "pens", "meadowW"],
-  miller: ["mill", "trough", "market"],
-  librarian: ["library", "press", "school"],
-  clerk: ["bank", "hall", "market"],
-  baker: ["trough", "market", "orchard"],
-  herder: ["meadowW", "meadowE", "pens"],
-  scribe: ["press", "library", "hall"],
-  smith: ["shed", "mill", "vault"],
-  courier: ["station", "square", "post"],
-};
+// Place groups, job homes and thresholds live in shared/src/skills.ts (the
+// npc-agent skill's rules-as-data). decide() below is a walker over NPC_SKILLS.
 
-const ALL_PLACES = [
-  "square", "hall", "market", "tavern", "press", "bank", "vault", "library", "booth", "clinic", "school", "post", "baths", "station", "barn", "shed", "mill", "pens", "pond", "dock", "meadowW", "meadowE", "orchard", "trough", "fire", "board",
-];
+/**
+ * Per-rule action: returns null when the rule declines at runtime (its roll
+ * failed or the destination is the current spot) so the chain continues with
+ * the next rule — identical to the old fall-through behaviour.
+ */
+type RuleHandler = (ctx: DecideContext, rule: NpcSkillRule) => Decision | null;
 
-const SOCIAL_PLACES = ["square", "tavern", "hall", "baths", "fire", "market", "board"] as const;
-const FOOD_PLACES = ["trough", "meadowW", "meadowE", "orchard"] as const;
-const WATER_PLACES = ["pond", "square"] as const;
-const REST_PLACES = ["barn", "pens"] as const;
-const WORK_PLACES = ["shed", "mill", "library", "press", "bank", "post", "school", "clinic"] as const;
-
-export function decide(ctx: DecideContext): Decision {
-  const { needs, clock, rng } = ctx;
-  const self = ctx.self;
-  const traits = self?.traits ?? [];
-  const spirits = self?.spirits ?? 0;
-
-  // trait thresholds mod
-  const tiredThreshold = traitHas(traits, "unflappable") ? 0.45 : traitHas(traits, "dreamy") ? 0.25 : 0.3;
-  const lonelyThreshold = traitHas(traits, "loyal") ? 0.45 : traitHas(traits, "gruff") ? 0.7 : 0.55;
-
+// keyed by the rule-id union: a rule without a handler is a compile error,
+// never a silent runtime skip
+const RULE_HANDLERS: Record<NpcSkillRule["id"], RuleHandler> = {
   // 1. Night sleep drive — instinct to rest
-  if (isNight(clock) && needs.tired > tiredThreshold) {
+  "rest-night": (ctx, rule) => {
+    const traits = ctx.self?.traits ?? [];
     // dreamy/cheerful may stay up a bit longer at fire/tavern
-    if (traitHas(traits, "cheerful") && clock < 0.8 && rng() < 0.3) {
+    if (traitHas(traits, "cheerful") && ctx.clock < NPC_THRESHOLDS.nightFireClock && ctx.rng() < 0.3) {
       const speech = generateSpeech(ctx, "talk", "fire").text;
-      return { act: "talk", place: "fire", reason: "night but spirits high at the fire", speech };
+      return { act: "talk", place: "fire", reason: rule.reasons[0]!, speech };
     }
-    return { act: "sleep", place: "barn", reason: "night is falling, need rest" };
-  }
+    return { act: "sleep", place: "barn", reason: rule.reasons[1]! };
+  },
 
   // 2. Thirst — survival instinct
-  if (needs.thirst > 0.6) {
+  "drink-water": (ctx, rule) => {
+    const traits = ctx.self?.traits ?? [];
     // gruff prefers pond isolation
-    const pondBias = traitHas(traits, "gruff") ? 0.75 : 0.6;
-    if (rng() < pondBias) {
-      const g = generateSpeech(ctx, "drink", "pond");
-      return { act: "drink", place: "pond", reason: "parched, seeking water", speech: g.text, targetId: g.targetId };
+    const pondBias = traitHas(traits, "gruff") ? NPC_THRESHOLDS.pondBiasGruff : NPC_THRESHOLDS.pondBias;
+    if (ctx.rng() < pondBias) {
+      const place = NPC_WATER_PLACES[0];
+      const g = generateSpeech(ctx, "drink", place);
+      return { act: "drink", place, reason: rule.reasons[0]!, speech: g.text, targetId: g.targetId };
     }
-    const g = generateSpeech(ctx, "drink", "square");
-    return { act: "drink", place: "square", reason: "throat dry, heading to fountain", speech: g.text, targetId: g.targetId };
-  }
+    const place = NPC_WATER_PLACES[1];
+    const g = generateSpeech(ctx, "drink", place);
+    return { act: "drink", place, reason: rule.reasons[1]!, speech: g.text, targetId: g.targetId };
+  },
 
   // 3. Hunger — food instinct, job influences
-  if (needs.hunger > 0.6) {
-    let opts = [...FOOD_PLACES] as string[];
+  "eat-food": (ctx, rule) => {
+    const job = ctx.self?.job;
+    let opts: string[] = [...NPC_FOOD_PLACES];
     // herder/baker bias
-    if (self?.job === "herder" && rng() < 0.3) opts = ["meadowW", "meadowW", "meadowE", "trough"];
-    if (self?.job === "baker" && rng() < 0.4) opts = ["trough", "trough", "market", "orchard"];
-    const place = pick(opts, rng);
-    const reason = place === "meadowW" ? "craving the good grass" : place === "meadowE" ? "sour grass is still grass" : place === "orchard" ? "apples sound right" : "oats at the trough";
+    if (job === "herder" && ctx.rng() < 0.3) opts = ["meadowW", "meadowW", "meadowE", "trough"];
+    if (job === "baker" && ctx.rng() < 0.4) opts = ["trough", "trough", "market", "orchard"];
+    const place = pick(opts, ctx.rng);
+    const reason =
+      place === "meadowW" ? rule.reasons[0]! :
+      place === "meadowE" ? rule.reasons[1]! :
+      place === "orchard" ? rule.reasons[2]! :
+      rule.reasons[3]!;
     const g = generateSpeech(ctx, "graze", place);
     return { act: "graze", place, reason, speech: g.text, targetId: g.targetId };
-  }
+  },
 
   // 4. Social — lonely instinct, spirits & traits affect
-  const effectiveLonely = needs.lonely + (spirits < -0.4 ? -0.15 : spirits > 0.4 ? 0.1 : 0);
-  if (effectiveLonely > lonelyThreshold) {
-    const opts = [...SOCIAL_PLACES] as const;
-    const place = pick(opts, rng);
-    const isArgueBase = rng() < 0.38;
+  "seek-company": (ctx, rule) => {
+    const traits = ctx.self?.traits ?? [];
+    const opts = NPC_SOCIAL_PLACES;
+    const place = pick(opts, ctx.rng);
+    const isArgueBase = ctx.rng() < 0.38;
     // traits: stubborn/gruff more argue, cheerful/unflappable less
     let argueChance = isArgueBase ? 0.5 : 0;
     if (traitHas(traits, "stubborn") || traitHas(traits, "gruff")) argueChance += 0.25;
     if (traitHas(traits, "cheerful") || traitHas(traits, "unflappable")) argueChance -= 0.18;
-    const act = rng() < argueChance ? "argue" : "talk";
+    const act = ctx.rng() < argueChance ? "argue" : "talk";
     const g = generateSpeech(ctx, act, place);
-    return { act, place, reason: "feeling lonely, seeking company", speech: g.text, targetId: g.targetId };
-  }
+    return { act, place, reason: rule.reasons[0]!, speech: g.text, targetId: g.targetId };
+  },
 
-  // 5. Spirits low -> seek comfort or lash out
-  if (spirits < -0.6 && rng() < 0.45) {
+  // 5. Spirits low -> seek comfort or lash out (55% of eligible turns decline)
+  "low-spirits": (ctx, rule) => {
+    if (ctx.rng() >= NPC_THRESHOLDS.lowSpiritsChance) return null;
     // low spirits: either isolate at barn/pond or argue
-    if (rng() < 0.5) {
+    if (ctx.rng() < 0.5) {
       const g = generateSpeech(ctx, "argue", "square");
-      return { act: "argue", place: pick(SOCIAL_PLACES, rng), reason: "spirits low, picking a fight", speech: g.text, targetId: g.targetId };
+      return { act: "argue", place: pick(NPC_SOCIAL_PLACES, ctx.rng), reason: rule.reasons[0]!, speech: g.text, targetId: g.targetId };
     }
-    return { act: "sleep", place: pick(REST_PLACES, rng), reason: "low spirits, need rest" };
-  }
+    return { act: "sleep", place: pick(NPC_REST_PLACES, ctx.rng), reason: rule.reasons[1]! };
+  },
 
   // 6. Free movement / wander instinct — THE CORE OF "ALWAYS MOVING"
   // If no urgent need, bots should wander, explore, work with movement, or chat stroll
   // This ensures bots do not stay idle in one location
-  const inquisitiveBonus = traitHas(traits, "inquisitive") ? 0.18 : 0;
-  const wanderChance = 0.42 + inquisitiveBonus + (spirits > 0.3 ? 0.1 : 0);
-  if (rng() < wanderChance) {
+  "wander-town": (ctx, rule) => {
+    const traits = ctx.self?.traits ?? [];
+    const spirits = ctx.self?.spirits ?? 0;
+    const inquisitiveBonus = traitHas(traits, "inquisitive") ? 0.18 : 0;
+    const wanderChance = NPC_THRESHOLDS.wanderChanceBase + inquisitiveBonus + (spirits > 0.3 ? 0.1 : 0);
+    if (ctx.rng() >= wanderChance) return null;
+
     // pick wander destination weighted
-    let pool: string[] = ALL_PLACES as string[];
+    let pool: string[] = [...NPC_ALL_PLACES];
     // bias based on job home + inquisitive explores far places, loyal stays near friends
-    const r = rng();
-    if (r < 0.22) pool = SOCIAL_PLACES as unknown as string[];
-    else if (r < 0.38) pool = WORK_PLACES as unknown as string[];
-    else if (r < 0.58) pool = FOOD_PLACES as unknown as string[];
-    else if (r < 0.72) pool = REST_PLACES as unknown as string[];
-    else pool = ALL_PLACES;
+    const r = ctx.rng();
+    if (r < 0.22) pool = [...NPC_SOCIAL_PLACES];
+    else if (r < 0.38) pool = [...NPC_WORK_PLACES];
+    else if (r < 0.58) pool = [...NPC_FOOD_PLACES];
+    else if (r < 0.72) pool = [...NPC_REST_PLACES];
 
     // prefer job homes 30% of time
-    if (self?.job && JOB_HOMES[self.job] && rng() < 0.3) {
-      pool = JOB_HOMES[self.job]!;
+    const job = ctx.self?.job;
+    if (job && NPC_JOB_HOMES[job] && ctx.rng() < 0.3) {
+      pool = [...NPC_JOB_HOMES[job]!];
     }
 
-    let place = pick(pool, rng);
+    let place = pick(pool, ctx.rng);
     // avoid staying still: 80% pick different from current
-    if (place === ctx.location && rng() < 0.8) {
-      place = pick(pool.filter((p) => p !== ctx.location), rng) ?? place;
+    if (place === ctx.location && ctx.rng() < 0.8) {
+      place = pick(pool.filter((p) => p !== ctx.location), ctx.rng) ?? place;
     }
 
     const acts = ["wander", "stroll", "explore", "work"] as const;
-    let act: string = pick(acts, rng);
+    let act: string = pick(acts, ctx.rng);
     // inquisitive more explore, cheerful more stroll/talk
-    if (traitHas(traits, "inquisitive") && rng() < 0.4) act = "explore";
-    if (traitHas(traits, "cheerful") && rng() < 0.35) act = "talk";
+    if (traitHas(traits, "inquisitive") && ctx.rng() < 0.4) act = "explore";
+    if (traitHas(traits, "cheerful") && ctx.rng() < 0.35) act = "talk";
 
     const g = generateSpeech(ctx, act, place);
-    const reasons = [
-      "out for a walk, need to see what's happening",
-      "instinct to move, staying still feels wrong",
-      "wandering — town is too quiet",
-      `heading to ${place}, curiosity`,
-      "catching some air, maybe there is a story",
-    ];
-    return { act, place, reason: pick(reasons, rng), speech: g.text, targetId: g.targetId };
+    const reason = fillTemplate(pick(rule.reasons, ctx.rng), { place });
+    return { act, place, reason, speech: g.text, targetId: g.targetId };
+  },
+
+  // 7. Keep busy grazing — even idle residents move
+  "busy-graze": (ctx, rule) => {
+    if (ctx.rng() >= NPC_THRESHOLDS.busyGrazeChance) return null;
+    const g = generateSpeech(ctx, "graze", "meadowW");
+    return { act: "graze", place: "meadowW", reason: rule.reasons[0]!, speech: g.text, targetId: g.targetId };
+  },
+
+  // 8. Work with movement — even work should move to job site
+  "work-job": (ctx, rule) => {
+    const job = ctx.self?.job;
+    if (!job || !NPC_JOB_HOMES[job]) return null;
+    const jobPlace = pick(NPC_JOB_HOMES[job]!, ctx.rng);
+    if (jobPlace === ctx.location) return null;
+    const g = generateSpeech(ctx, "work", jobPlace);
+    return {
+      act: "work",
+      place: jobPlace,
+      reason: fillTemplate(rule.reasons[0]!, { place: jobPlace }),
+      speech: g.text,
+      targetId: g.targetId,
+    };
+  },
+
+  // 9. Fallback: stroll to a social spot so they keep moving
+  "stroll-on": (ctx, rule) => {
+    const place = pick(NPC_SOCIAL_PLACES, ctx.rng);
+    const g = generateSpeech(ctx, "stroll", place);
+    return { act: "stroll", place, reason: rule.reasons[0]!, speech: g.text, targetId: g.targetId };
+  },
+};
+
+/**
+ * Rules-driven decision: walk NPC_SKILLS (shared/src/skills.ts) in priority
+ * order, evaluate each rule's `when` predicate against the appraised context,
+ * and apply the first handler that fires. The winning rule id is attached as
+ * `Decision.skill`; `reason` stays the player-facing sentence.
+ */
+export function decide(ctx: DecideContext): Decision {
+  const ruleCtx: NpcRuleContext = {
+    night: isNight(ctx.clock),
+    clock: ctx.clock,
+    needs: ctx.needs,
+    spirits: ctx.self?.spirits ?? 0,
+    traits: ctx.self?.traits ?? [],
+    job: ctx.self?.job ?? "",
+    location: ctx.location,
+  };
+
+  for (const rule of NPC_SKILLS) {
+    if (!rule.when(ruleCtx)) continue;
+    const handler = RULE_HANDLERS[rule.id];
+    if (!handler) continue; // unknown rule id: skip instead of throwing
+    const decision = handler(ctx, rule);
+    if (decision) return { ...decision, skill: rule.id };
   }
 
-  // 7. Work with movement — even work should move to job site
-  if (rng() < 0.18) {
-    const g = generateSpeech(ctx, "graze", "meadowW");
-    return { act: "graze", place: "meadowW", reason: "keeping busy with grazing", speech: g.text, targetId: g.targetId };
-  }
-  // work at job home or wander nearby
-  if (self?.job && JOB_HOMES[self.job]) {
-    const jobPlace = pick(JOB_HOMES[self.job]!, rng);
-    if (jobPlace !== ctx.location) {
-      const g = generateSpeech(ctx, "work", jobPlace);
-      return { act: "work", place: jobPlace, reason: `work calls at ${jobPlace}`, speech: g.text, targetId: g.targetId };
-    }
-  }
-  // fallback: stroll to nearby social spot so they keep moving
-  const fallbackPlace = pick(SOCIAL_PLACES, rng);
-  const g = generateSpeech(ctx, "stroll", fallbackPlace);
-  return { act: "stroll", place: fallbackPlace, reason: "keeping busy, legs need moving", speech: g.text, targetId: g.targetId };
+  // Unreachable while NPC_SKILLS ends with an unconditional rule — keeps
+  // decide() total even if a future rule table edit leaves the chain empty.
+  const last = NPC_SKILLS[NPC_SKILLS.length - 1]!;
+  return {
+    act: "stroll",
+    place: last.places[0] ?? "square",
+    reason: last.reasons[0]!,
+    skill: last.id,
+  };
 }

@@ -1,9 +1,21 @@
-import type { TownSnapshot } from "@hermesbook/shared";
+import { useState } from "react";
+import type { TownSnapshot } from "@slopagentbook/shared";
 import { GenePreview } from "../components/GenePreview.js";
 import { Link } from "../router/hash.js";
+import { Avatar } from "../components/Avatar.js";
+import { ProfileModal, type SessionLike } from "./ProfileModal.js";
 
-export function LlamaView({ snapshot, id }: { snapshot: TownSnapshot; id: string }) {
+export function LlamaView({
+  snapshot,
+  id,
+  session,
+}: {
+  snapshot: TownSnapshot;
+  id: string;
+  session?: SessionLike | null;
+}) {
   const r = snapshot.herd.find((h) => h.id === id);
+  const [profileOpen, setProfileOpen] = useState(false);
   if (!r) return <div className="card">Resident {id} not found. <Link to="herd">Back to herd</Link></div>;
 
   const children = snapshot.herd.filter((h) => h.parent === r.id);
@@ -18,14 +30,38 @@ export function LlamaView({ snapshot, id }: { snapshot: TownSnapshot; id: string
     <div className="stagger">
       <div className="grid grid-2">
         <div className="card" style={{ textAlign: "center" }}>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
+            <Avatar resident={r} size={72} testId="llama-avatar" />
+          </div>
           <GenePreview parentGenes={r.genes} name="" scale={4} />
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8 }}>{r.name} <span className="mono muted" style={{ fontSize: 12 }}>G{r.gen}</span></div>
           <div className="mono muted" style={{ fontSize: 12 }}>{r.handle} · {r.job}</div>
           <div className="mono" style={{ fontSize: 12, marginTop: 8, background: "#f4f1ea", padding: "6px 8px", borderRadius: 4 }}>{r.bio}</div>
+          {(r.links?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 8, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+              {r.links!.map((l) => (
+                <a
+                  key={`${l.url}-${l.label}`}
+                  href={l.url}
+                  target="_blank"
+                  rel="noopener noreferrer nofollow"
+                  className="mono"
+                  style={{ fontSize: 11, color: "var(--accent)" }}
+                >
+                  {l.label}
+                </a>
+              ))}
+            </div>
+          )}
           <div style={{ marginTop: 8, display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
             {r.traits.map((t) => <span key={t} className="mono" style={{ fontSize: 11, border: "1px solid #d8d2c6", padding: "2px 7px", borderRadius: 12 }}>{t}</span>)}
           </div>
           <div className="mono faint" style={{ fontSize: 10, marginTop: 8 }}>Born {new Date(r.born).toLocaleString()} · {r.forks} forks · {r.genes}</div>
+          <div style={{ marginTop: 10 }}>
+            <button type="button" className="btn" data-testid="open-profile" onClick={() => setProfileOpen(true)}>
+              Profile
+            </button>
+          </div>
         </div>
 
         <div className="card">
@@ -93,6 +129,15 @@ export function LlamaView({ snapshot, id }: { snapshot: TownSnapshot; id: string
           {snapshot.feed.filter((p) => p.by === r.id).length === 0 && <div className="mono muted" style={{ fontSize: 12 }}>No posts yet.</div>}
         </div>
       </div>
+
+      {profileOpen && (
+        <ProfileModal
+          resident={r}
+          session={session ?? null}
+          onClose={() => setProfileOpen(false)}
+          nameOf={(otherId) => snapshot.herd.find((h) => h.id === otherId)?.name ?? otherId.slice(0, 6)}
+        />
+      )}
     </div>
   );
 }

@@ -1,9 +1,10 @@
-// @ts-nocheck — Vercel func bundling uses built-in TS 5.9 with @types/express mismatch; local tsc is source of truth
 import express from "express";
 import cors from "cors";
-import type { TownSnapshot, Resident } from "@hermesbook/shared";
-import { Hc, rf, encodeGenes } from "@hermesbook/shared";
+import type { TownSnapshot, Resident } from "@slopagentbook/shared";
+import { Hc, rf, encodeGenes } from "@slopagentbook/shared";
+import { defaultConfig } from "@slopagentbook/shared";
 import { saveAtomically, saveDebounced, flushDebounced } from "./persist.js";
+import { normalizeHerd } from "./pgstore.js";
 import { createInitialWorld, makeResidentFromFork, generateEdition, generateWeatherEvent } from "./world.js";
 import { loadWithRecovery } from "./persist.js";
 import { updateQuestProgress, claimQuest, refreshExpiredQuests, generateQuest, createInitialQuests } from "./quests.js";
@@ -16,7 +17,7 @@ import { createGatewayRouter } from "./gateway.js";
 import { ensureHouseResidents } from "./houseagents.js";
 import { retireResolved, tickTournament, type TournamentEvent } from "./tournament.js";
 // shared helpers — single definitions live in agents.ts (dedup with gateway.ts)
-import { CONTROL_CHARS, clientIp, createRateLimiter, pickNextSimId } from "./agents.js";
+import { CONTROL_CHARS, clientIp, createRateLimiter, pickNextSimId, parseProfileUrl, parseProfileLinks, AgentError } from "./agents.js";
 import { z } from "zod";
 import { existsSync } from "fs";
 import path from "path";
@@ -38,6 +39,16 @@ function resolveDataPath(): string {
 
 const DATA_PATH = resolveDataPath();
 
+if (process.env.DATABASE_URL) {
+  try {
+    const { neon } = await import("@neondatabase/serverless");
+    const { ensureSchema } = await import("./pgstore.js");
+    await ensureSchema(neon(process.env.DATABASE_URL));
+  } catch (e) {
+    console.error("[persist] ensureSchema failed, booting ephemeral world:", e);
+  }
+}
+
 // Load or create world
 let world: TownSnapshot;
 try {
@@ -52,6 +63,73 @@ try {
 if (!Array.isArray((world as any).quests)) (world as any).quests = [];
 if (world.quests.length === 0) {
   world.quests = createInitialQuests(world);
+}
+
+/**
+ * Branding keys a rename may carry into an existing town. On-chain fields are
+ * NOT here on purpose: the treasury address points at real funds, so a default
+ * must never rewrite it.
+ */
+const BRAND_KEYS = ["name", "ticker", "xUrl"] as const;
+
+/**
+ * Every brand a saved town may still be carrying, oldest first.
+ *
+ * The project has been renamed more than once, and a town only ever sees
+ * whatever was current when it last wrote. Listing the whole history means a
+ * town that skipped a rename is still carried forward, and listing it as a set
+ * rather than a single value means the rebrand is not something that silently
+ * stops working after the next rename.
+ */
+const PREVIOUS_BRANDS: Record<string, string[]> = {
+  name: ["Hermesbook", "Agentbook"],
+  ticker: ["HERMES", "AGBK"],
+  xUrl: ["https://x.com/hermesbook", "https://x.com/agentbook"],
+};
+
+/**
+ * Apply the rename to a town that still carries the old brand.
+ *
+ * A rename that only edits `defaultConfig` never reaches a town with a save —
+ * the loaded row's own config wins, which is exactly what keeps the treasury
+ * address safe. Pure branding needs the opposite, so it is reconciled here at
+ * boot. Matching the previous brand explicitly means this can only ever fire on
+ * a town that predates the rename, never on one someone has retitled by hand.
+ *
+ * Returns the keys it changed so the caller can log and persist.
+ */
+export function applyRebrand(config: Record<string, unknown>): string[] {
+  const changed: string[] = [];
+  for (const key of BRAND_KEYS) {
+    const previous = PREVIOUS_BRANDS[key] ?? [];
+    const current = config[key];
+    if (typeof current !== "string") continue;
+    if (defaultConfig[key] === current) continue; // already on the new brand
+    if (!previous.includes(current)) continue; // someone renamed it by hand
+    config[key] = defaultConfig[key];
+    changed.push(key);
+  }
+  return changed;
+}
+
+const rebranded = applyRebrand(world.config as unknown as Record<string, unknown>);
+if (rebranded.length > 0) {
+  console.log(`[boot] rebranded ${rebranded.join(", ")} -> ${world.config.name} (${world.config.ticker})`);
+  saveDebounced(DATA_PATH, world, 0);
+}
+
+// A row written before the merge knew about capacity can hold more residents
+// than `maxHerd`, with duplicate names — two instances each admitted the same
+// one while unaware of the other. Normalizing HERE is what makes it heal: boot
+// is the only point every instance passes through, and `POST /api/agent/join`
+// reads the in-memory herd, so an unnormalized load makes the town permanently
+// refuse new residents without ever writing (and therefore without ever
+// merging) anything.
+if (world.herd.length !== normalizeHerd(world).length) {
+  const before = world.herd.length;
+  world.herd = normalizeHerd(world) as unknown as typeof world.herd;
+  console.log(`[boot] herd normalized ${before} -> ${world.herd.length} (maxHerd ${world.config.maxHerd})`);
+  saveDebounced(DATA_PATH, world, 0);
 }
 
 // Hermes Trials (08 §8): the three house bots, seeded here rather than in
@@ -120,6 +198,12 @@ const forkSchema = z.object({
   bio: z.string().max(180).optional().default(""),
   traits: z.array(z.string()).max(3).optional().default([]),
   job: z.string().optional().default("herder"),
+  // profile presentation, optional at registration. Shape only: the scheme
+  // allowlist and every other rule live in parseProfileUrl/parseProfileLinks
+  // (agents.ts), the same validators PATCH /api/agent/profile uses, so there is
+  // one answer to "is this url acceptable" and not two that can drift.
+  avatar: z.string().optional(),
+  links: z.array(z.object({ label: z.string(), url: z.string() })).optional(),
 });
 
 app.post("/api/fork", async (req, res) => {
@@ -133,13 +217,26 @@ app.post("/api/fork", async (req, res) => {
     res.status(400).json({ error: "invalid payload", details: parsed.error.flatten() });
     return;
   }
-  const { parent, name, bio, traits, job } = parsed.data;
+  const { parent, name, bio, traits, job, avatar, links } = parsed.data;
 
-  if (world.herd.length >= world.config.maxHerd) {
-    res.status(400).json({ error: "the pasture is full" });
-    return;
+  // Validated before ANY mutation, in the same spirit as the parent/name checks
+  // below: a bad avatar must not be able to create a resident first and fail
+  // afterwards. These throw AgentError (400) naming the field.
+  let profile: { avatar?: string; links?: { label: string; url: string }[] } = {};
+  try {
+    if (avatar !== undefined) profile.avatar = parseProfileUrl("avatar", avatar);
+    if (links !== undefined) profile.links = parseProfileLinks(links);
+  } catch (e) {
+    if (e instanceof AgentError) {
+      res.status(e.status).json({ error: e.message, field: e.field ?? null });
+      return;
+    }
+    throw e;
   }
 
+  // Input validation runs BEFORE the capacity check so a bad payload always
+  // reports why it is bad — a full pasture must not mask a missing parent or
+  // a taken name (test: "POST /api/fork validates input before capacity").
   const parentResident = world.herd.find((h) => h.id === parent);
   if (!parentResident) {
     res.status(400).json({ error: "parent not found" });
@@ -158,12 +255,24 @@ app.post("/api/fork", async (req, res) => {
     return;
   }
 
+  // capacity last — right before the mutation: a valid payload on a full
+  // pasture still gets the 400, but only after the input itself is checked.
+  if (world.herd.length >= world.config.maxHerd) {
+    res.status(400).json({ error: "the pasture is full" });
+    return;
+  }
+
   // genetics
   const parentGenes = Hc(parentResident.genes);
   const childGenes = rf(parentGenes, name);
   const childGenesStr = encodeGenes(childGenes);
 
   const child: Resident = makeResidentFromFork(parentResident, name, bio, traits, job, childGenesStr);
+  // profile presentation rides along on the child. NOT copied from the parent:
+  // an avatar is a person's, not a bloodline's, and inheriting one would let a
+  // fork impersonate the resident it forked from.
+  if (profile.avatar !== undefined) child.avatar = profile.avatar;
+  if (profile.links !== undefined && profile.links.length > 0) child.links = profile.links;
   world.herd.push(child);
   parentResident.forks = (parentResident.forks ?? 0) + 1;
   world.now = Date.now();
@@ -257,16 +366,31 @@ app.post("/api/quests/refresh", (_req, res) => {
 // External agent gateway (join/resume/me/perceive/act/say/quests/boards)
 app.use(createGatewayRouter({ world, broadcast, DATA_PATH, scheduler }));
 
+// Gateway the mounted MCP handler calls back on. An explicit SLOPAGENTBOOK_URL
+// wins (the documented override); otherwise it is THIS server — never a
+// hard-coded 3000, or a custom PORT would send MCP reads and writes to another
+// town (mcp/src/client.ts falls back to localhost:3000).
+export function mcpGatewayUrl(): string {
+  const explicit = process.env.SLOPAGENTBOOK_URL?.trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const port = Number(process.env.PORT ?? 3000);
+  return `http://localhost:${Number.isFinite(port) && port > 0 ? port : 3000}`;
+}
+
 // MCP Streamable HTTP transport — opt-in via MCP_HTTP=1 so the default bundle
 // never pays for the MCP SDK. Dynamic import keeps the dependency lazy.
 if (process.env.MCP_HTTP === "1") {
-  void import("@hermesbook/mcp/http")
+  void import("@slopagentbook/mcp/http")
     .then(({ createMcpHttpHandler }) => {
+      // The handler's default client reads SLOPAGENTBOOK_URL, so pin it to this
+      // server before the handler is built.
+      process.env.SLOPAGENTBOOK_URL = mcpGatewayUrl();
       const handler = createMcpHttpHandler();
-      // app.all (not app.post): non-POST must reach the handler so it can
-      // answer 405 + Allow instead of Express's default 404
+      // app.all, not app.post: Express would answer GET /mcp with its own 404
+      // page, and the handler's 405 contract (mcp/src/http.ts) would never be
+      // reachable through the mount.
       app.all("/mcp", (req, res) => void handler(req, res));
-      console.log("[mcp] Streamable HTTP mounted at POST /mcp");
+      console.log(`[mcp] Streamable HTTP mounted at POST /mcp (gateway ${process.env.SLOPAGENTBOOK_URL})`);
     })
     .catch((e) => console.error("[mcp] failed to mount /mcp:", e));
 }
@@ -276,6 +400,8 @@ app.get("/api/health", (_req, res) => res.json({ ok: true, now: Date.now() }));
 
 // Turn scheduler interval (18s per doc demo; prod faster for testing 4s)
 const TURN_MS = Number(process.env.TURN_MS ?? 1800);
+// 5s on pg avoids rewriting the full snapshot every 1.8s tick.
+const TICK_SAVE_MS = Number(process.env.PG_SAVE_DEBOUNCE_MS ?? (process.env.DATABASE_URL ? 5000 : 800));
 let turnTimer: ReturnType<typeof setInterval> | null = null;
 let turnCount = 0;
 function startScheduler(): void {
@@ -360,7 +486,7 @@ function startScheduler(): void {
     }
 
     // debounced save for routine ticks
-    saveDebounced(DATA_PATH, world);
+    saveDebounced(DATA_PATH, world, TICK_SAVE_MS);
   }, TURN_MS);
   // allow process to exit in tests
   if (turnTimer && typeof (turnTimer as NodeJS.Timeout).unref === "function") (turnTimer as NodeJS.Timeout).unref();

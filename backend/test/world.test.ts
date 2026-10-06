@@ -1,26 +1,61 @@
 import { describe, it, expect } from "vitest";
-import type { Contest } from "@hermesbook/shared";
+import type { Contest } from "@slopagentbook/shared";
 import { createInitialWorld, generateEdition, generateWeatherEvent } from "../src/world.js";
 import { LOCATIONS } from "../src/locations.js";
+import { Pe, vt } from "../src/map.js";
+import { createToken } from "../src/agents.js";
 import { Pe, V, WorldSize } from "../src/map.js";
 
 describe("World", () => {
-  it("has 26 locations", () => {
-    expect(LOCATIONS.length).toBe(26);
-    expect(LOCATIONS.find((l) => l.id === "square")!.x).toBe(96);
+  it("has 100 locations across 8 districts", () => {
+    expect(LOCATIONS.length).toBe(100);
+    // the square moved when the map grew 5x — it was TRANSLATED to the centre,
+    // never rescaled, so its footprint is still 18x15. Its width is even, so its
+    // exact centre sits half a tile off the grid centre; "near the middle" is the
+    // invariant, not "exactly on it".
+    const square = LOCATIONS.find((l) => l.id === "square")!;
+    expect(Math.abs(square.x + square.w / 2 - Pe / 2)).toBeLessThanOrEqual(1);
+    expect(square.w).toBe(18);
+    expect(square.h).toBe(15);
+    // each district actually landed something
+    for (const id of ["foundry", "wharf", "cemetery", "scriptorium", "bandstand", "gatehouse", "peatWorks", "byre"]) {
+      expect(LOCATIONS.find((l) => l.id === id), `missing district building ${id}`).toBeDefined();
+    }
   });
 
-  it("map dimensions 3360x2048", () => {
-    expect(Pe * V).toBe(3360);
-    expect(WorldSize.width).toBe(3360);
-    expect(WorldSize.height).toBe(2048);
+  it("keeps every location inside the grid", () => {
+    for (const l of LOCATIONS) {
+      expect(l.x, `${l.id} x`).toBeGreaterThanOrEqual(0);
+      expect(l.y, `${l.id} y`).toBeGreaterThanOrEqual(0);
+      expect(l.x + l.w, `${l.id} right`).toBeLessThanOrEqual(Pe);
+      expect(l.y + l.h, `${l.id} bottom`).toBeLessThanOrEqual(vt);
+    }
+  });
+
+  it("is branded SlopAgentbook, and the ticker matches", () => {
+    // the rebrand is display-layer only: the on-chain fields are deliberately
+    // untouched so an existing treasury/token address keeps meaning something
+    const c = createInitialWorld().config;
+    expect(c.name).toBe("SlopAgentbook");
+    expect(c.ticker).toBe("SLB");
+    expect(c.xUrl).toContain("slopagentbook");
+    // credentials were NOT rebranded — changing them would log out every
+    // registered agent, so these must stay exactly as they were
+    expect(createToken()).toMatch(/^sabk_/);
+  });
+
+  it("map dimensions 16800x10240 (5x per axis)", () => {
+    expect(Pe * V).toBe(16800);
+    expect(vt * V).toBe(10240);
+    expect(WorldSize.width).toBe(16800);
+    expect(WorldSize.height).toBe(10240);
   });
 
   it("initial world 8 herd", () => {
     const w = createInitialWorld();
     expect(w.herd.length).toBe(8);
     expect(w.config.maxHerd).toBe(64);
-    expect(w.config.name).toBe("Hermesbook");
+    expect(w.config.name).toBe("SlopAgentbook");
     expect(w.feed.length).toBeGreaterThan(0);
     expect(w.editions.length).toBe(1);
   });

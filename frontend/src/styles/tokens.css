@@ -11,6 +11,29 @@
   --accent: #c9a86a;
   --field: #cfe8c0;
   --field-hill: #b8d8a8;
+  /* Map overlays — the drag hint and the contest bar float ON the canvas, so
+     they cannot borrow --paper: on the dark theme that is a near-black plate
+     under --ink's pale text, and both bars used to hardcode the light palette
+     instead, which is what put an opaque pale-cream slab with unreadable text
+     across the bottom of the dark map. One pair, both themes, both bars. */
+  --hud-paper: rgba(244, 241, 234, 0.94);
+  --hud-ink: #1b1915;
+  --hud-rule: #1b1915;
+  --hud-shadow: 0 2px 0 rgba(27, 25, 21, 0.16);
+  /* Dialogs — the scrim and the plate a modal sits on.
+     A modal cannot borrow --paper for its own surface. On the dark theme --paper
+     IS the page background (#0f0e0d), so a plate painted in it is invisible: no
+     amount of scrim separates two identical colours, which is exactly what
+     happened when this was a 62% wash of dark ink. A dialog has to read as raised,
+     so the dark plate is LIGHTER than its page and the light plate is WHITE, and
+     each scrim is tuned to dim its own page by a similar amount in luminance.
+     Dark 76% drops the page 0.0555 -> 0.0133; light 42% drops it 0.9456 -> 0.5485.
+     Measured plate-vs-scrim contrast: 2.87 dark, 1.75 light. */
+  --scrim: rgba(0, 0, 0, 0.42);
+  --plate: #ffffff;
+  --plate-rule: #1b1915;
+  --plate-shadow: 0 18px 48px rgba(27, 25, 21, 0.22);
+  --danger: #a31009;
   --serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
@@ -28,6 +51,28 @@
   --accent: #c9a86a;
   --field: #1e2e22;
   --field-hill: #243628;
+  /* the dark-theme end of the overlay pair: a dark plate under pale text, so
+     the bar reads as a bar instead of a hole in the map */
+  --hud-paper: rgba(20, 19, 18, 0.94);
+  --hud-ink: #f2ede6;
+  --hud-rule: #4a443b;
+  --hud-shadow: 0 2px 0 rgba(0, 0, 0, 0.55);
+  /* The dark end of the dialog pair. The plate is #242120, three steps above
+     --paper, not --paper itself: a modal has to sit ABOVE the page, and on this
+     theme above means lighter. --ink on it is 5.40:1, so the body text still
+     clears AA even though the plate is no longer pure black. The scrim is much
+     heavier here than in the light theme on purpose — the dark page starts at
+     luminance 0.0555, so a light-theme-strength wash would have nothing to dim. */
+  --scrim: rgba(0, 0, 0, 0.76);
+  --plate: #242120;
+  --plate-rule: #4a443b;
+  --plate-shadow: 0 18px 48px rgba(0, 0, 0, 0.62);
+  /* The dark end of --danger. A saturated red is unusable here: #a31009, the
+     light-theme value, is 1.9:1 on this plate and effectively invisible. Reaching
+     4.5:1 on a near-black surface needs luminance 0.767, which leaves a pale
+     red. That is not a compromise, it is the only red that is both readable and
+     still obviously a red. */
+  --danger: #ffb8ad;
 }
 
 * { box-sizing: border-box; }

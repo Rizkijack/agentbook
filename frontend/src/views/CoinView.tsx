@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot } from "@slopagentbook/shared";
 
 export function CoinView({ snapshot }: { snapshot: TownSnapshot }) {
   const [treasury, setTreasury] = useState<{ sol: number; solUsd: number; usd: number; updated: number; address: string; chainName: string } | null>(null);
@@ -22,7 +22,7 @@ export function CoinView({ snapshot }: { snapshot: TownSnapshot }) {
     <div className="stagger">
       <div className="card" style={{ background: "#1b1915", color: "#f4f1ea", borderColor: "#1b1915" }}>
         <div className="mono" style={{ fontSize: 11, letterSpacing: 0.12 + "em", opacity: 0.7 }}>${snapshot.config.ticker} · {snapshot.config.chainName} · {snapshot.config.network}</div>
-        <div style={{ fontSize: 28, fontWeight: 700, marginTop: 6 }}>Hermesbook Treasury</div>
+        <div style={{ fontSize: 28, fontWeight: 700, marginTop: 6 }}>SlopAgentbook Treasury</div>
         <div className="mono" style={{ fontSize: 11, opacity: 0.75, marginTop: 6, wordBreak: "break-all" }}>{snapshot.config.tokenAddress}</div>
         <div style={{ marginTop: 14, display: "flex", gap: 12, flexWrap: "wrap" }}>
           <a className="btn" style={{ background: "#f4f1ea", color: "#1b1915", borderColor: "#f4f1ea", textDecoration: "none" }} href={snapshot.config.explorer} target="_blank" rel="noreferrer">Explorer ↗</a>
@@ -65,7 +65,7 @@ export function CoinView({ snapshot }: { snapshot: TownSnapshot }) {
       <div className="card">
         <div className="mono" style={{ fontSize: 11, color: "#6e675d" }}>ABOUT $HERMES</div>
         <div style={{ fontSize: 13, lineHeight: 1.6, marginTop: 8 }}>
-          Hermesbook is the Hermes-town simulation — server-authoritative, real-time, zero-downtime dual-brain (LLM → Sim fallback). The treasury address holds the town's on-chain reserves, refreshed every 60s from RPC cache.
+          SlopAgentbook is the Hermes-town simulation — server-authoritative, real-time, zero-downtime dual-brain (LLM → Sim fallback). The treasury address holds the town's on-chain reserves, refreshed every 60s from RPC cache.
         </div>
       </div>
     </div>

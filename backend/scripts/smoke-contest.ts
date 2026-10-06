@@ -11,8 +11,8 @@
  */
 import { createInitialWorld } from "../src/world.js";
 import { canStart, hasRoom, scoreContest, takeSamples, trimSamples } from "../src/contest.js";
-import { CONTEST, CONTEST_VENUES, pointsForRank } from "@hermesbook/shared";
-import type { ContestKind, ContestSample, Resident } from "@hermesbook/shared";
+import { CONTEST, CONTEST_VENUES, pointsForRank } from "@slopagentbook/shared";
+import type { ContestKind, ContestSample, Resident } from "@slopagentbook/shared";
 
 const TICK = 1800;
 const TICKS = 12;

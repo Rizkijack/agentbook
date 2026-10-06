@@ -8,7 +8,7 @@ import os from "os";
 // tests never write to data/town.json (env is restored right after import).
 const prevDataPath = process.env.DATA_PATH;
 process.env.NODE_ENV = "test";
-process.env.DATA_PATH = path.join(os.tmpdir(), `hermesbook-gateway-test-${process.pid}-${Date.now()}.json`);
+process.env.DATA_PATH = path.join(os.tmpdir(), `agentbook-gateway-test-${process.pid}-${Date.now()}.json`);
 const { app, world, DATA_PATH } = await import("../src/server.js");
 const { createGatewayRouter } = await import("../src/gateway.js");
 const { isEligibleForSim, AGENT_AFK_MS } = await import("../src/agents.js");
@@ -41,7 +41,7 @@ describe("Agent gateway", () => {
       .post("/api/agent/join")
       .send({ name: joinName, bio: "arrived from outside", job: "scribe", traits: ["inquisitive"], origin: "vitest" });
     expect(res.status).toBe(200);
-    expect(res.body.token).toMatch(/^hbk_[0-9a-f]{48}$/);
+    expect(res.body.token).toMatch(/^sabk_[0-9a-f]{48}$/);
     expect(res.body.resident.mind.control).toBe("external");
     token = res.body.token;
     agentId = res.body.agentId;
@@ -76,6 +76,37 @@ describe("Agent gateway", () => {
     expect(world.feed[0]?.text).toContain("halo dari luar");
     expect(broadcasts.some((b) => b.type === "order")).toBe(true);
     expect(broadcasts.some((b) => b.type === "post")).toBe(true);
+  });
+
+  it("POST /api/agent/join signs the browser in without a second call", async () => {
+    // Registering should be enough: the same HttpOnly cookie POST /api/agent/session
+    // sets is issued here, so nobody has to hand the token back to the page.
+    const name = "AutoSess" + Date.now().toString().slice(-6);
+    const res = await request(app).post("/api/agent/join").send({ name, bio: "", job: "clerk" });
+    expect(res.status).toBe(200);
+
+    const cookies = res.headers["set-cookie"] as unknown as string[] | undefined;
+    expect(cookies).toBeDefined();
+    const cookie = cookies!.join(";");
+    expect(cookie).toContain("sabk_session=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).toContain("Path=/");
+    // the cookie must carry the token that was issued, and nothing else
+    expect(cookie).toContain(encodeURIComponent(res.body.token));
+
+    // and the session it created already works: no Authorization header, no
+    // second POST /api/agent/session round trip
+    const me = await request(app).get("/api/agent/me").set("Cookie", cookies!);
+    expect(me.status).toBe(200);
+    expect(me.body.agentId).toBe(res.body.agentId);
+
+    const say = await request(app)
+      .post("/api/agent/say")
+      .set("Cookie", cookies!)
+      .send({ text: "posted right after registering", board: "chat" });
+    expect(say.status).toBe(200);
+    expect(world.feed[0]?.text).toContain("posted right after registering");
   });
 
   it("POST /api/agent/join rejects duplicate names (case-insensitive)", async () => {
@@ -144,7 +175,7 @@ describe("Agent gateway", () => {
     expect(res.body.agents).toBeUndefined();
     const raw = JSON.stringify(res.body);
     expect(raw).not.toContain("tokenHash");
-    expect(raw).not.toContain("hbk_");
+    expect(raw).not.toContain("sabk_");
   });
 
   it("POST /api/agent/act rejects an unknown board", async () => {
@@ -154,5 +185,34 @@ describe("Agent gateway", () => {
       .send({ act: "talk", speech: "halo", board: "kabinet" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/board/);
+  });
+
+  // Browser session regression: the routes above must also accept the httpOnly
+  // sabk_session cookie, so the chat UI can talk without ever holding the token
+  // in JavaScript. Bearer keeps precedence — see session.test.ts for the full
+  // endpoint coverage.
+  it("GET /api/agent/me also accepts the sabk_session cookie, and still 401s with neither", async () => {
+    const neither = await request(app).get("/api/agent/me");
+    expect(neither.status).toBe(401);
+    expect(neither.body.error).toBe("unauthorized");
+
+    const viaCookie = await request(app).get("/api/agent/me").set("Cookie", `sabk_session=${token}`);
+    expect(viaCookie.status).toBe(200);
+    expect(viaCookie.body.agentId).toBe(agentId);
+    expect(viaCookie.body.resident.id).toBe(residentId);
+
+    // a wrong cookie is still just "not authenticated", never a 500
+    const bad = await request(app).get("/api/agent/me").set("Cookie", "sabk_session=sabk_nope");
+    expect(bad.status).toBe(401);
+  });
+
+  it("POST /api/agent/act works with the sabk_session cookie and no Authorization header", async () => {
+    const res = await request(spyApp)
+      .post("/api/agent/act")
+      .set("Cookie", `sabk_session=${token}`)
+      .send({ act: "talk", speech: "no header needed" });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(world.feed[0]?.text).toContain("no header needed");
   });
 });

@@ -20,7 +20,7 @@ import {
   type ContestResult,
   type ContestSample,
   type ContestStanding,
-} from "@hermesbook/shared";
+} from "@slopagentbook/shared";
 
 // ---------------------------------------------------------------------------
 // sampling (08 §4.1)

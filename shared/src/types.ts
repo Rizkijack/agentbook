@@ -6,6 +6,17 @@ export interface Resident {
   job: string;
   bio: string;
   traits: string[];
+  /**
+   * Profile presentation, owned by the resident's token holder. Both are
+   * optional so a snapshot written before they existed still loads and still
+   * typechecks — and so `avatar` reads as "absent -> render a generated one"
+   * rather than as an empty string. Validated at the boundary
+   * (`backend/src/agents.ts`): the server stores the string and never fetches it.
+   */
+  /** Absolute `http(s)` URL of a custom avatar. Absent → render a generated one. */
+  avatar?: string;
+  /** External links, in the owner's order. Max 5 enforced at the boundary. */
+  links?: { label: string; url: string }[];
   gen: number;
   parent?: string;
   forks: number;
@@ -23,6 +34,12 @@ export interface Resident {
       placeName: string;
       since: number;
       why: string;
+      /**
+       * Id of the npc-agent skill rule that produced this decision
+       * (skills/npc-agent, machine-readable source: shared/src/skills.ts).
+       * Optional so snapshots written before the skill existed still load.
+       */
+      skill?: string;
     };
     spirits: number;
     obsession: string;
@@ -38,6 +55,15 @@ export interface AgentRecord {
   id: string;
   residentId: string;
   tokenHash: string;
+  /**
+   * The human account that registered/operates this agent (registration page,
+   * `#/register`). Optional: records written before the page existed have none,
+   * and `GET /api/snapshot` redacts the whole registry anyway.
+   */
+  owner?: {
+    name: string;
+    handle: string;
+  };
   origin: string;
   joinedAt: number;
   lastActAt: number;
@@ -224,12 +250,45 @@ export interface TownSnapshot {
   /** external agent registry (optional — older saves without it stay valid) */
   agents?: AgentRecord[];
   /**
+   * Residents deliberately removed from the town. Optional: saves written
+   * before deletion existed have none.
+   *
+   * The town otherwise only ever grows. `mergeSnapshots` unions the herd so two
+   * Vercel instances saving at once cannot lose each other's residents, and the
+   * agent registry explicitly never shrinks because the token hash is the only
+   * credential an owner holds. A deletion therefore has nowhere to live: drop
+   * the resident from the stored row and the next save from an instance still
+   * holding it in memory merges it straight back.
+   *
+   * A tombstone is the removal's own durable, mergeable record. Tombstones are
+   * unioned like every other list and each union filters them out, so a deletion
+   * survives concurrent writers instead of racing them.
+   */
+  tombstones?: ResidentTombstone[];
+  /**
    * Hermes Trials contests (08 §11). Optional — older saves have none and
    * the contest HUD must stay unmounted rather than guess at an empty state.
    */
   contests?: Contest[];
   /** current tournament season standings (08 §5) */
   season?: Season;
+}
+
+/**
+ * A record that a resident was removed from the town on purpose.
+ *
+ * `id` is the resident id. `agentIds` lists the registry entries to drop too —
+ * kept alongside so a merge can retire the credential even when the registry row
+ * it refers to is not in the snapshot being merged.
+ */
+export interface ResidentTombstone {
+  id: string;
+  /** why it was removed, for the audit trail — never shown to players */
+  reason: string;
+  /** ms epoch */
+  at: number;
+  /** agent registry ids that belonged to this resident */
+  agentIds?: string[];
 }
 
 export interface TownConfig {

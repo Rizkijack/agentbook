@@ -19,8 +19,8 @@
  *    `Date.now()`, which is a different day entirely.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { CONTEST, CONTEST_VENUES, SEASON, contestsPerDay, dayOfYear } from "@hermesbook/shared";
-import type { Contest, Season, TownSnapshot } from "@hermesbook/shared";
+import { CONTEST, CONTEST_VENUES, SEASON, contestsPerDay, dayOfYear } from "@slopagentbook/shared";
+import type { Contest, Season, TownSnapshot } from "@slopagentbook/shared";
 import { createInitialWorld } from "../src/world.js";
 import { joinWorld, AGENT_AFK_MS } from "../src/agents.js";
 import { ensureHouseResidents, HOUSE_AGENT_IDS, isHouseAgent } from "../src/houseagents.js";

@@ -14,18 +14,32 @@ const vt = 128;       // Map height in tile units (128 rows)
 const V  = 16;        // Size per tile = 16 x 16 pixels
 
 const WorldSize = {
-  width:  Pe * V,     // 210 * 16 = 3.360 pixels
-  height: vt * V      // 128 * 16 = 2.048 pixels
+  width:  Pe * V,     // 1050 * 16 = 16.800 pixels
+  height: vt * V      // 640 * 16 = 10.240 pixels
 };
 ```
 
-The **3.360 x 2.048 pixel** map is generated procedurally at initialization using a seeded PRNG (`df(20260921)`), producing grassy hills, river streams, ponds, dirt roads, and stone footpaths.
+> **Superseded — read the current numbers, not the ones below.** The grid was
+> 210x128 (3360x2048 px) in the original spec. It is now **1050x640
+> (16800x10240 px)**, 5x per axis, after the district build-out in §2.1. Those
+> dimensions live in `shared/src/map.ts` — one definition, read by both the
+> backend and the browser. They used to be declared twice (once in
+> `backend/src/map.ts`, once hand-copied into `frontend/src/canvas/constants.ts`)
+> and drifted the moment the map grew, which is why the collision map was
+> indexing a 210x128 world over 1050x640 tiles and every arrival spot read as
+> unwalkable.
+
+The **16.800 x 10.240 pixel** map is generated procedurally at initialization using a seeded PRNG (`df(20260921)`), producing grassy hills, river streams, ponds, dirt roads, and stone footpaths.
 
 ---
 
-## 2. Catalog of 26 Town Locations (`_n`)
+## 2. Catalog of Town Locations (`_n`)
 
-The Llamabook world has 26 points of interest grouped into functional categories:
+The town has **100 points of interest** grouped into functional categories.
+
+The table below is the **original 34-building baseline**, at the pre-5x
+coordinates. It is kept as the spec of record; the 58 district buildings added
+later are in `backend/src/locations.ts` and summarised in §2.1.
 
 | ID | Place Name | Category | Tile Coordinates (`x, y, w, h`) | Arrival Spot | Description / Blurb |
 |---|---|---|---|---|---|
@@ -55,6 +69,90 @@ The Llamabook world has 26 points of interest grouped into functional categories
 | `trough` | The Trough | Food | `94, 83, 6, 3` | `(96, 84)` | The oat-feeding trough at 7 AM. Come early or go hungry. |
 | `fire` | The Fire | Social | `108, 82, 5, 4` | `(110, 84)` | The evening bonfire, lit without knowing who started it. |
 | `board` | The Notice Board | Civic | `103, 57, 3, 2` | `(104, 58)` | The notice board where townsfolk argue in writing. |
+| `stables` | The Stables | Rest | `86, 24, 9, 6` | `(90, 31)` | Horses sleep here; the llamas pretend not to care. |
+| `granary` | The Granary | Work | `76, 31, 8, 7` | `(80, 39)` | Oat reserves guarded like a state secret. |
+| `warehouse` | The Warehouse | Work | `118, 32, 9, 6` | `(122, 39)` | Storage for everything the market could not sell. |
+| `chapel` | The Chapel | Civic | `176, 56, 7, 7` | `(179, 64)` | Sunday prayers for extra grass and shorter winters. |
+| `inn` | The Wayfarer Inn | Social | `140, 68, 10, 6` | `(145, 75)` | Beds for travellers who finally stopped walking. |
+| `smithy` | The Smithy | Work | `162, 92, 8, 7` | `(166, 100)` | Horseshoes, hinges, and the occasional bent anvil. |
+| `farmhouse` | The Farmhouse | Rest | `80, 100, 11, 7` | `(85, 108)` | Where oats begin their short and noble careers. |
+| `theatre` | The Fleece Theatre | Social | `98, 101, 11, 6` | `(103, 108)` | Woolly performances nightly; the fleece always gets the last laugh. |
+
+### 2.1 Districts (the 5x build-out)
+
+The grid went from 210x128 to 1050x640 — 5x per axis, 25x the area. The original
+42 buildings were **translated by (+419, +253) to sit at the centre of the new
+grid, never rescaled**: their `w`/`h` is what `NPC_H` (resident height, 10px) is
+derived from in `frontend/src/canvas/engine.ts`, so rescaling them would have
+resized every resident in town. 58 buildings were then added around the core in
+eight districts:
+
+| District | Approx. tiles | Buildings | Character |
+|---|---|---|---|
+| Core (original 42) | 435..615, 277..363 | 42 | Streets, square, market, tavern |
+| Northgate | 430..606, 160..191 | 8 | Gatehouse, tollhouse, garrison, watchtower, beacon, curtain wall |
+| Riverside Wharf | 190..337, 400..444 | 7 | Wharf, boathouse, net loft, salt warehouse, ferry slip, chandlery |
+| The Commons | 710..884, 288..317 | 7 | Glasshouse, orangery, apiary, bandstand, aviary, hedge maze, rosewalk |
+| Ironworks | 160..319, 135..164 | 7 | Foundry, brick kiln, ore shed, ore crane, quarry office, charcoal yard, slag heap |
+| University Quarter | 730..894, 135..162 | 7 | Scriptorium, lecture hall, anatomy room, print house, observatory annex, disputation hall, archive |
+| Farm Belt | 440..588, 438..462 | 6 | Byre, threshing barn, paddock, drying yard, sheepfold, dairy |
+| Hollowmere | 710..806, 490..525 | 5 | Cemetery, chapel of bones, hermitage, charnel house, bone house |
+| Ashen Moor | 170..236, 552..565 | 3 | Peat works, charcoal kiln, bog hut |
+| Open ground | — | 7 | 4 meadows, the orchard, millpond, the river, the east fen |
+
+The river is split into `riverRun` and `riverMouth` with a gap at y 320..339 so
+the West Approach crosses it at a ford.
+
+**The road network is generated, not authored.** `shared/src/map.ts` holds one
+`ROADS` table — 35 segments: a perimeter ring, four spokes into the core, and a
+connector per district. `scripts/emit-scenery-data.mjs` derives the forest zones
+(30, covering 23% of the map), the street lamps and the 70 vehicle routes from
+it, and splices them into `scenery.ts`. Before emitting, the network is checked
+against the real location table: no road may overlap a building, no forest zone
+may overlap a road or a building, and every arrival spot must be walkable from
+the square.
+
+Two consequences worth knowing:
+
+- **Traffic lights are core-only** (`CORE_ROADS`, 8 of 35 roads, 10 junctions).
+  The full network has 46 intersections; signalling all of them made the map
+  read like an airport.
+- **Resident size is a function of the town, not a constant.** `NPC_H` is
+  `median(built footprint) / 10`. The district buildings were sized to keep that
+  median at 128x80px so the residents stayed 10px tall;
+  `frontend/test/npc-proportions.test.ts` recomputes it independently.
+
+### 2.2 Parcels, foliage and labels (the three visual rules)
+
+A 25x area with the same 100 buildings drops the density 25x, which left the map
+reading as a town floating on an empty lawn. Three rules fix that, and all three
+are load-bearing:
+
+1. **Tree density falls off radially from the square** — 5% in the town proper,
+   17% on the outskirts, 30% in open country. It was a flat 6.5% with a border
+   band at literal tile offsets from the 210x128 world, so most of the region
+   between the core and the districts had nothing on it at all.
+2. **Forest floors are rectangles, not ellipses.** The zone is a rect and the
+   trees inside it are scattered on a rect grid, so an elliptical floor left
+   grass showing at every corner. With 30 zones that artefact covered a fifth of
+   the map.
+3. **Every district has a parcel** (`DISTRICTS` in `scenery.ts`): a tinted apron,
+   a dashed boundary, and a name set along the top edge. The town proper is a
+   parcel too, so "every building sits in exactly one parcel" is a single
+   uniform rule (`scenery.test.ts` asserts it) and the core reads as a bounded
+   place rather than an undefined blob.
+
+Two rendering details that are easy to get wrong and were:
+
+- **Map labels must be sized in screen pixels.** `drawTerrainDecor` runs inside
+  `ctx.scale(cam.zoom)`, so a `ctx.font` of `"9px"` lands on screen at
+  `9 * zoom` px — the forest and district names were unreadable exactly when the
+  map was widest, and grew when you zoomed in. `View` carries `zoom` and
+  `uiFont()` divides by it.
+- **Resident name tags stop below `TAG_MIN_ZOOM` (0.7).** A tag is a fixed 8
+  screen px, so pulling back makes it cover *more* world, not less. At
+  `MIN_ZOOM` 64 tags stacked over the town and hid it. The followed resident is
+  exempt at any zoom.
 
 ---
 

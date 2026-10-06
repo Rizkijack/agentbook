@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CONTEST, SEASON, pointsForRank, type ContestResult, type ContestSample, type Season } from "@hermesbook/shared";
+import { CONTEST, SEASON, pointsForRank, type ContestResult, type ContestSample, type Season } from "@slopagentbook/shared";
 import { scoreContest } from "../src/contest.js";
 import {
   applyContestResult,

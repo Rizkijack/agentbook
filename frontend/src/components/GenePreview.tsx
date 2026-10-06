@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect } from "react";
-import { Hc, rf, encodeGenes } from "@hermesbook/shared";
+import { Hc, rf, encodeGenes } from "@slopagentbook/shared";
 import { renderLlama } from "../canvas/renderer/draw.js";
 import { sf } from "../canvas/renderer/skeleton.js";
 

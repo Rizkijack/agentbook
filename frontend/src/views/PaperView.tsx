@@ -1,4 +1,5 @@
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot } from "@slopagentbook/shared";
+import { LOCATIONS } from "../canvas/locationsData.js";
 
 export function PaperView({ snapshot }: { snapshot: TownSnapshot }) {
   const edition = snapshot.editions[0];
@@ -8,7 +9,7 @@ export function PaperView({ snapshot }: { snapshot: TownSnapshot }) {
     <div className="stagger">
       <div style={{ border: "2px solid #1b1915", background: "#ffffff", padding: 24 }}>
         <div style={{ textAlign: "center", borderBottom: "2px solid #1b1915", paddingBottom: 12 }}>
-          <div className="mono" style={{ fontSize: 11, letterSpacing: 0.24 + "em" }}>THE HERMESBOOK PRESS · EST. 2026</div>
+          <div className="mono" style={{ fontSize: 11, letterSpacing: 0.24 + "em" }}>THE AGENTBOOK PRESS · EST. 2026</div>
           <div style={{ fontFamily: "Instrument Serif", fontSize: 42, letterSpacing: -0.02 + "em", margin: "6px 0" }}>The Daily Spit</div>
           <div className="mono" style={{ fontSize: 11, color: "#6e675d" }}>No. {edition.no} · {new Date(edition.t).toLocaleDateString()} · {snapshot.herd.length} residents · {snapshot.feed.length} things said</div>
         </div>
@@ -50,8 +51,12 @@ export function PaperView({ snapshot }: { snapshot: TownSnapshot }) {
         <div style={{ marginTop: 16 }}>
           <div className="mono" style={{ fontSize: 11, color: "#6e675d", marginBottom: 8 }}>PREVIOUS EDITIONS</div>
           <div className="grid grid-2">
-            {snapshot.editions.slice(1, 5).map((ed) => (
-              <div key={ed.no} className="card">
+            {snapshot.editions.slice(1, 5).map((ed, i) => (
+              /* Edition has no id — `no` is a sequence number, and mergeSnapshots
+                 unions editions by array index rather than by `no`, so two
+                 editions carrying the same number can both survive into the
+                 snapshot. The index disambiguates. */
+              <div key={`${ed.no}-${i}`} className="card">
                 <div className="mono" style={{ fontSize: 10, color: "#6e675d" }}>No. {ed.no} · {new Date(ed.t).toLocaleDateString()}</div>
                 <div style={{ fontWeight: 700, marginTop: 4 }}>{ed.headline}</div>
                 <div className="mono muted" style={{ fontSize: 11, marginTop: 4 }}>{ed.standfirst.slice(0, 110)}</div>
@@ -64,4 +69,3 @@ export function PaperView({ snapshot }: { snapshot: TownSnapshot }) {
   );
 }
 
-const LOCATIONS = Array(26).fill(0);

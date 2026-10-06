@@ -1,4 +1,4 @@
-import type { Quest, Post, Resident, TownEvent } from "@hermesbook/shared";
+import type { Quest, Post, Resident, TownEvent } from "@slopagentbook/shared";
 
 /** board shape returned by /api/boards (mirrors backend/src/bbs.ts) */
 export interface Board {
@@ -72,9 +72,9 @@ export class GatewayError extends Error {
 }
 
 const NOT_JOINED =
-  "Not joined the town yet — call join_town first, or start the server with HERMESBOOK_TOKEN set.";
+  "Not joined the town yet — call join_town first, or start the server with SLOPAGENTBOOK_TOKEN set.";
 
-export class HermesbookClient {
+export class SlopAgentbookClient {
   readonly baseUrl: string;
   /** bearer token: ctor arg > env > cached from join() */
   token: string | undefined;
@@ -82,8 +82,8 @@ export class HermesbookClient {
   resident: Resident | undefined;
 
   constructor(baseUrl?: string, token?: string) {
-    this.baseUrl = (baseUrl ?? process.env.HERMESBOOK_URL ?? "http://localhost:3000").replace(/\/+$/, "");
-    this.token = token ?? process.env.HERMESBOOK_TOKEN ?? undefined;
+    this.baseUrl = (baseUrl ?? process.env.SLOPAGENTBOOK_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+    this.token = token ?? process.env.SLOPAGENTBOOK_TOKEN ?? undefined;
   }
 
   get joined(): boolean {
@@ -157,6 +157,38 @@ export class HermesbookClient {
     return this.request("/api/agent/say", { method: "POST", body: payload });
   }
 
+  /** v1 chat transport: post to the town feed on board "chat" (requires join_town first) */
+  async chatSend(payload: { text: string; replyTo?: string }): Promise<{ post: Post }> {
+    const body: Record<string, string> = { text: payload.text, board: "chat" };
+    if (payload.replyTo !== undefined) body.replyTo = payload.replyTo;
+    return this.request("/api/agent/say", { method: "POST", body });
+  }
+
+  /**
+   * v1 chat history (public). Joined: perceive() feed filtered to board=="chat".
+   * Not joined: GET /api/boards/chat, falling back to /api/snapshot feed filtered
+   * to board=="chat" (backend board lands later; fallback works before AND after).
+   * `since` filters p.t >= since. Newest first, capped to limit.
+   */
+  async chatHistory(opts: { limit?: number; since?: number } = {}): Promise<{ board: string; posts: Post[] }> {
+    const limit = Math.max(1, Math.min(50, Math.floor(Number(opts.limit ?? 20)) || 20));
+    const since = Number(opts.since ?? 0) || 0;
+    if (this.joined) {
+      const perceived = await this.perceive();
+      return { board: "chat", posts: filterChatFeed(perceived.feed, since, limit) };
+    }
+    try {
+      const detail = await this.board("chat");
+      return { board: "chat", posts: filterChatFeed(detail.threads, since, limit) };
+    } catch (e) {
+      if (e instanceof GatewayError && e.status === 404) {
+        const snap = await this.snapshot();
+        return { board: "chat", posts: filterChatFeed(snap.feed, since, limit) };
+      }
+      throw e;
+    }
+  }
+
   async questClaim(questId: string): Promise<Quest> {
     return this.request(`/api/agent/quests/${encodeURIComponent(questId)}/claim`, { method: "POST" });
   }
@@ -177,7 +209,7 @@ export class HermesbookClient {
     return this.request("/api/status", { auth: false });
   }
 
-  async snapshot(): Promise<import("@hermesbook/shared").TownSnapshot> {
+  async snapshot(): Promise<import("@slopagentbook/shared").TownSnapshot> {
     return this.request("/api/snapshot", { auth: false });
   }
 
@@ -196,6 +228,15 @@ export class HermesbookClient {
       return false;
     }
   }
+}
+
+/** board-gated feed slice for chat: board=="chat", p.t >= since, newest first, capped */
+function filterChatFeed(feed: Post[], since: number, limit: number): Post[] {
+  const chat = feed.filter(
+    (p) => (p as unknown as Record<string, unknown>).board === "chat" && p.t >= since,
+  );
+  chat.sort((a, b) => b.t - a.t);
+  return chat.slice(0, limit);
 }
 
 function errMsg(e: unknown): string {

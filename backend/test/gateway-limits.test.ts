@@ -8,7 +8,7 @@ import { readFile } from "fs/promises";
 // as gateway.test.ts) so we can inspect what actually lands on disk.
 const prevDataPath = process.env.DATA_PATH;
 process.env.NODE_ENV = "test";
-process.env.DATA_PATH = path.join(os.tmpdir(), `hermesbook-limits-test-${process.pid}-${Date.now()}.json`);
+process.env.DATA_PATH = path.join(os.tmpdir(), `agentbook-limits-test-${process.pid}-${Date.now()}.json`);
 const { app, world, DATA_PATH } = await import("../src/server.js");
 const { rateLimitAct } = await import("../src/agents.js");
 if (prevDataPath === undefined) delete process.env.DATA_PATH;
@@ -24,10 +24,10 @@ describe("gateway limits & auth", () => {
     expect(res.status).toBe(200);
     token = res.body.token;
     agentId = res.body.agentId;
-    expect(token).toMatch(/^hbk_[0-9a-f]{48}$/);
+    expect(token).toMatch(/^sabk_[0-9a-f]{48}$/);
 
     const raw = await readFile(DATA_PATH, "utf8");
-    expect(raw).not.toContain("hbk_"); // plaintext bearer token never reaches disk
+    expect(raw).not.toContain("sabk_"); // plaintext bearer token never reaches disk
     expect(raw).toContain("tokenHash"); // only the sha256 hash is stored
   });
 

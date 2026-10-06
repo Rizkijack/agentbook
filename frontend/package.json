@@ -1,5 +1,5 @@
 {
-  "name": "@hermesbook/frontend",
+  "name": "@slopagentbook/frontend",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@hermesbook/shared": "workspace:*",
+    "@slopagentbook/shared": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

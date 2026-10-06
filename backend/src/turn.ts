@@ -1,17 +1,17 @@
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot, SSEOrder } from "@slopagentbook/shared";
+import { isNpcSkillId } from "@slopagentbook/shared";
 import type { Brain } from "./brain.js";
 import { decide as simDecide } from "./simbrain.js";
 import { tickNeeds, dayClock } from "./needs.js";
 import { LOCATION_BY_ID } from "./locations.js";
 import { postToBoard } from "./bbs.js";
 
-export interface OrderEvent {
-  type: "order";
-  id: string;
-  act: string;
-  place: string;
-  secs: number;
-}
+/**
+ * The order that goes out over SSE. Deliberately an alias of the shared
+ * `SSEOrder`, not a hand-copied twin: `broadcast(result.order)` sends this
+ * object verbatim, so the payload shape must be the one the frontend decodes.
+ */
+export type OrderEvent = SSEOrder;
 
 export interface SpitEvent {
   type: "spit";
@@ -27,6 +27,8 @@ export interface DecisionInput {
   reason: string;
   speech?: string;
   targetId?: string | null;
+  /** npc-agent skill rule id (skills/npc-agent); unknown ids are dropped, never thrown */
+  skill?: string;
 }
 
 export interface ApplyOptions {
@@ -85,6 +87,11 @@ export function applyDecision(
   const loc = LOCATION_BY_ID.get(place);
   const placeName = loc ? loc.name.toLowerCase() : place;
   const decisionAny = decision as any;
+  // choke point for the sim scheduler AND the gateway: only ids present in
+  // NPC_SKILLS survive, so the UI never receives a garbage skill. The miss case
+  // is an explicit "" rather than undefined — JSON drops undefined keys, and a
+  // dropped key would leave the resident's previous skill label stuck on the HUD.
+  const skill = isNpcSkillId(decision.skill) ? decision.skill : "";
 
   // Move & Apply: update needs and mind
   agent.needs = tickNeeds(agent.needs, decision.act, secs);
@@ -210,6 +217,7 @@ export function applyDecision(
     placeName,
     since: Date.now(),
     why: decision.reason,
+    skill,
   };
 
   // Projects: small progress bump if at civic/work site — instinct duty
@@ -219,7 +227,7 @@ export function applyDecision(
 
   world.now = Date.now();
 
-  const order: OrderEvent = { type: "order", id: agent.id, act: decision.act, place, secs };
+  const order: OrderEvent = { type: "order", id: agent.id, act: decision.act, place, secs, skill, why: decision.reason };
   return { order, spit: spitEvent, post: createdPost };
 }
 

@@ -1,13 +1,13 @@
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
-import { HermesbookClient } from "./client.js";
+import { SlopAgentbookClient } from "./client.js";
 import { McpDispatcher, type JsonRpcMessage, type JsonRpcResponse } from "./protocol.js";
 
 /**
  * MCP stdio entrypoint: newline-delimited JSON-RPC 2.0 on stdin/stdout.
  * stdout carries the protocol ONLY — no logging here, ever.
  */
-export function startStdio(client: HermesbookClient = new HermesbookClient()): void {
+export function startStdio(client: SlopAgentbookClient = new SlopAgentbookClient()): void {
   const dispatcher = new McpDispatcher(client);
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
 

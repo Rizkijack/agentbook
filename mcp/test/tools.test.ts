@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HermesbookClient } from "../src/client.js";
+import { SlopAgentbookClient } from "../src/client.js";
 import { McpDispatcher } from "../src/protocol.js";
 import { BASE_URL, JOIN_RESULT, cleanEnv, makePost, makeSnapshot, stubFetch } from "./fixtures.js";
+import { getTool } from "../src/tools.js";
 import type { RecordedCall } from "./fixtures.js";
 
 /** run one tools/call through the real dispatcher (same path stdio uses) */
@@ -15,7 +16,7 @@ function parsed(result: { content: { type: string; text: string }[] }): Record<s
   return JSON.parse(result.content[0].text) as Record<string, any>;
 }
 
-function fresh(client = new HermesbookClient(BASE_URL)): { d: McpDispatcher; client: HermesbookClient } {
+function fresh(client = new SlopAgentbookClient(BASE_URL)): { d: McpDispatcher; client: SlopAgentbookClient } {
   return { d: new McpDispatcher(client), client };
 }
 
@@ -64,7 +65,7 @@ describe("McpDispatcher — tool behavior (fetch stubbed)", () => {
       expect(result.content).toHaveLength(1);
       expect(result.content[0].type).toBe("text");
       expect(result.content[0].text).toMatch(/join_town/); // "…call join_town first…"
-      expect(result.content[0].text).toMatch(/HERMESBOOK_TOKEN/);
+      expect(result.content[0].text).toMatch(/SLOPAGENTBOOK_TOKEN/);
     }
     expect(calls).toHaveLength(0); // rejected before any network I/O — process survived
   });
@@ -108,7 +109,7 @@ describe("McpDispatcher — tool behavior (fetch stubbed)", () => {
       }
       throw new Error(`unexpected URL: ${call.url}`);
     });
-    const client = new HermesbookClient(BASE_URL, "preloaded-token");
+    const client = new SlopAgentbookClient(BASE_URL, "preloaded-token");
     const { d } = fresh(client);
 
     const result = await callTool(d, "events_since", { since: 1_700_000_000_000 });
@@ -131,17 +132,17 @@ describe("McpDispatcher — tool behavior (fetch stubbed)", () => {
     expect(result.content[0].text).toContain("join_town");
   });
 
-  it("resources/read hermesbook://boards returns JSON contents without auth", async () => {
+  it("resources/read slopagentbook://boards returns JSON contents without auth", async () => {
     const calls = stubFetch((call) => {
       if (call.url.endsWith("/api/boards")) return [{ id: "general", name: "General", description: "town talk" }];
       throw new Error(`unexpected URL: ${call.url}`);
     });
     const { d } = fresh();
 
-    const res = await d.handle({ jsonrpc: "2.0", id: 8, method: "resources/read", params: { uri: "hermesbook://boards" } });
+    const res = await d.handle({ jsonrpc: "2.0", id: 8, method: "resources/read", params: { uri: "slopagentbook://boards" } });
     expect(res!.error).toBeUndefined();
     const contents = (res!.result as { contents: { uri: string; mimeType: string; text: string }[] }).contents;
-    expect(contents[0].uri).toBe("hermesbook://boards");
+    expect(contents[0].uri).toBe("slopagentbook://boards");
     expect(contents[0].mimeType).toBe("application/json");
     expect(JSON.parse(contents[0].text)).toEqual([{ id: "general", name: "General", description: "town talk" }]);
     expect(calls[0].headers.authorization).toBeUndefined();
@@ -159,5 +160,32 @@ describe("McpDispatcher — tool behavior (fetch stubbed)", () => {
     expect(view).toMatchObject({ brain: "sim", herd: 12, feed: 34, questsAvailable: 0 });
     expect(typeof view.clock).toBe("number");
     expect(calls).toHaveLength(2);
+  });
+});
+
+describe("tool catalog contract", () => {
+  it("quest_claim promises a COMPLETED quest, because that is all the gateway settles", () => {
+    // claimQuest (backend/src/quests.ts) rejects anything but status
+    // "completed" with a 400. Describing the tool as claiming an *available*
+    // quest guarantees every agent fails its first call.
+    const tool = getTool("quest_claim");
+    expect(tool).toBeDefined();
+    expect(tool!.description).toMatch(/completed quest/i);
+    expect(tool!.description).not.toMatch(/available quest/i);
+    expect(tool!.description).toMatch(/join_town/); // auth is still a prerequisite
+  });
+
+  it("every tool carries an input schema and a description", () => {
+    for (const name of [
+      "join_town", "world_status", "world_snapshot", "feed_recent", "who_is",
+      "act", "say", "quests_list", "quest_claim", "events_since",
+      "chat_send", "chat_history",
+    ]) {
+      const tool = getTool(name);
+      expect(tool, `missing tool ${name}`).toBeDefined();
+      expect(tool!.description.length).toBeGreaterThan(10);
+      expect(tool!.inputSchema.type).toBe("object");
+    }
+    expect(getTool("nope")).toBeUndefined();
   });
 });

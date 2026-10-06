@@ -1,4 +1,4 @@
-import { HermesbookClient } from "./client.js";
+import { SlopAgentbookClient } from "./client.js";
 import { TOOLS, getTool, type ToolResult } from "./tools.js";
 import { RESOURCES, getResource } from "./resources.js";
 
@@ -27,7 +27,7 @@ export const INVALID_PARAMS = -32602;
 export const INTERNAL_ERROR = -32603;
 
 export const PROTOCOL_VERSION = "2024-11-05";
-export const SERVER_INFO = { name: "hermesbook-mcp", version: "0.1.0" };
+export const SERVER_INFO = { name: "slopagentbook-mcp", version: "0.1.0" };
 
 /** notifications get no response — return null */
 type Outcome = JsonRpcResponse | null;
@@ -35,7 +35,7 @@ type Outcome = JsonRpcResponse | null;
 export class McpDispatcher {
   private initialized = false;
 
-  constructor(private readonly client: HermesbookClient) {}
+  constructor(private readonly client: SlopAgentbookClient) {}
 
   get isInitialized(): boolean {
     return this.initialized;

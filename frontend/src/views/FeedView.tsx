@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot } from "@slopagentbook/shared";
 
 type Tab = "latest" | "replies" | "spit" | "what happened";
 
@@ -24,10 +24,15 @@ export function FeedView({ snapshot }: { snapshot: TownSnapshot }) {
         ))}
       </div>
       <div className="stagger" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {items.slice(0, 80).map((p) => {
+        {/* The index is part of the key because p.id is not unique across every
+            tab. Posts carry a real id, but the "what happened" tab synthesises
+            one from String(e.t) — a millisecond timestamp — and TownEvent has no
+            id field at all, so two events raised in the same tick collide and
+            React stops being able to tell the children apart. */}
+        {items.slice(0, 80).map((p, i) => {
           const author = snapshot.herd.find((h) => h.id === p.by);
           return (
-            <div key={p.id} className="card" style={{ display: "flex", gap: 12 }}>
+            <div key={`${p.id}-${i}`} className="card" style={{ display: "flex", gap: 12 }}>
               <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#e8e3d7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
                 {(p.name[0] ?? "?").toUpperCase()}
               </div>

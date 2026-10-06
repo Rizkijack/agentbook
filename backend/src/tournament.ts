@@ -24,7 +24,7 @@ import {
   type Season,
   type SeasonStanding,
   type TownSnapshot,
-} from "@hermesbook/shared";
+} from "@slopagentbook/shared";
 import { canStart, hasRoom, scoreContest, takeSamples, trimSamples } from "./contest.js";
 import { isAfk } from "./agents.js";
 import { isHouseAgent, pickHouseAgent, quietFillAgents, willShowUp } from "./houseagents.js";

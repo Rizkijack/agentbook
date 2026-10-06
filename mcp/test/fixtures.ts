@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { Post, Quest, Resident, TownConfig, TownEvent, TownSnapshot } from "@hermesbook/shared";
+import type { Post, Quest, Resident, TownConfig, TownEvent, TownSnapshot } from "@slopagentbook/shared";
 
 /** base url used by every test client — no real network, fetch is stubbed */
 export const BASE_URL = "http://gw.test";
@@ -42,8 +42,8 @@ export function stubFetch(router: Router): RecordedCall[] {
 
 /** no token/url leakage from the ambient shell into the tests */
 export function cleanEnv(): void {
-  delete process.env.HERMESBOOK_TOKEN;
-  delete process.env.HERMESBOOK_URL;
+  delete process.env.SLOPAGENTBOOK_TOKEN;
+  delete process.env.SLOPAGENTBOOK_URL;
 }
 
 export function makeResident(i: number): Resident {
@@ -108,8 +108,8 @@ export function makeQuest(i: number): Quest {
 
 export function makeConfig(): TownConfig {
   return {
-    name: "Hermesbook",
-    ticker: "HMB",
+    name: "SlopAgentbook",
+    ticker: "SLB",
     tokenAddress: "0x0",
     chainName: "test",
     network: "testnet",

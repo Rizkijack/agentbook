@@ -27,7 +27,7 @@
  * impure step is the one that has to be: `ensureHouseResidents` creates bodies,
  * and `world.ts`'s `createAgentResident` draws their genes and needs.
  */
-import { CONTEST, CONTEST_VENUES, type ContestKind, type Resident, type TownSnapshot } from "@hermesbook/shared";
+import { CONTEST, CONTEST_VENUES, type ContestKind, type Resident, type TownSnapshot } from "@slopagentbook/shared";
 import { createAgentResident } from "./world.js";
 
 /** Fixed ids — a save must be able to find these bots again after a reload. */

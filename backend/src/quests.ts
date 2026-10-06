@@ -1,4 +1,4 @@
-import type { TownSnapshot, Quest, QuestType } from "@hermesbook/shared";
+import type { TownSnapshot, Quest, QuestType } from "@slopagentbook/shared";
 import { LOCATIONS } from "./locations.js";
 
 type Template = Omit<Quest, "id" | "progress" | "status" | "createdAt" | "expiresAt" | "giver" | "giverName" | "completedAt"> & { giver?: string };
@@ -166,6 +166,24 @@ export function createInitialQuests(world: TownSnapshot): Quest[] {
   });
 }
 
+/**
+ * Normalize the hidden `_visited` field (not part of the Quest type — it is
+ * cast in) into a JSON-safe `string[]`.
+ *
+ * The world is persisted with JSON.stringify, and `JSON.stringify(new Set())`
+ * is `{}` — so a save written while `_visited` was a Set comes back as a plain
+ * object with no `.has`, which used to throw `TypeError: ...has is not a
+ * function` on the next boot. A live runtime can also still carry a Set.
+ * Anything else (undefined, `{}`, a non-array object) starts empty; the
+ * never-regress rule on `progress` keeps that corrupt record from resetting a
+ * quest that was already underway.
+ */
+function normalizeVisited(raw: unknown): string[] {
+  if (Array.isArray(raw)) return [...new Set(raw.filter((v): v is string => typeof v === "string"))];
+  if (raw instanceof Set) return [...raw].filter((v): v is string => typeof v === "string");
+  return [];
+}
+
 export function updateQuestProgress(world: TownSnapshot, evt: { act: string; place: string; agentId: string; postKind?: string }): Quest[] {
   const updated: Quest[] = [];
   for (const q of world.quests) {
@@ -184,19 +202,22 @@ export function updateQuestProgress(world: TownSnapshot, evt: { act: string; pla
       else if (!q.targetPlace) matched = true; // any talk
     }
     if (q.type === "explore" && q.targetPlaces && q.targetPlaces.includes(evt.place)) {
-      // explore requires distinct places: we track visited set via progress+visited cache
-      // store visited in quest as _visited hidden
+      // explore requires distinct places: we track the visited set in the
+      // hidden `_visited` field. It must survive JSON persistence, so it is
+      // normalized to a string[] on every read and written back as an array —
+      // never kept as a Set, which stringify turns into `{}` (see
+      // normalizeVisited above).
       const anyQ = q as any;
-      // _visited is a Set in memory, but JSON persistence turns it into a plain
-      // object — revive it instead of crashing on .has()
-      if (!(anyQ._visited instanceof Set)) {
-        anyQ._visited = new Set<string>(Array.isArray(anyQ._visited) ? anyQ._visited : []);
-      }
-      if (!anyQ._visited.has(evt.place)) {
-        anyQ._visited.add(evt.place);
+      const visited = normalizeVisited(anyQ._visited);
+      anyQ._visited = visited;
+      if (!visited.includes(evt.place)) {
+        visited.push(evt.place);
         matched = true;
-        // progress is size of visited
-        q.progress = anyQ._visited.size;
+        // progress is size of visited, but never lower than what is stored:
+        // a corrupt legacy save can hold progress > visited.length, and a
+        // quest near completion must not fall back to the start.
+        const stored = Number.isFinite(q.progress) ? q.progress : 0;
+        q.progress = Math.max(stored, visited.length);
         if (q.progress >= q.required) {
           q.status = "completed";
           q.completedAt = Date.now();

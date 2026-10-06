@@ -1,5 +1,40 @@
 import { useEffect, useRef, useState } from "react";
-import type { TownSnapshot, Resident, Post, Quest } from "@hermesbook/shared";
+import type { TownSnapshot, Resident, Post, Quest } from "@slopagentbook/shared";
+
+/**
+ * Apply one SSE `order` to the snapshot — pure, so the thinking HUD logic can
+ * be tested without an EventSource. A **present** string wins, including a blank
+ * one: the current server always sends `skill`/`why` ("" = no skill) and a blank
+ * must clear the stale label instead of keeping it. Key **absent** = an order
+ * from a server that predates the fields → keep what the snapshot already has.
+ */
+export function patchOrder(prev: TownSnapshot, ev: Record<string, unknown>): TownSnapshot {
+  const { id, act, place } = ev as { id: string; act: string; place: string };
+  const skill = typeof ev.skill === "string" ? ev.skill : undefined;
+  const why = typeof ev.why === "string" ? ev.why : undefined;
+  return {
+    ...prev,
+    herd: prev.herd.map((h) =>
+      h.id === id
+        ? {
+            ...h,
+            mind: {
+              ...h.mind,
+              doing: {
+                ...h.mind.doing,
+                act,
+                place,
+                placeName: place,
+                since: Date.now(),
+                ...(skill !== undefined ? { skill } : {}),
+                ...(why !== undefined ? { why } : {}),
+              },
+            },
+          }
+        : h
+    ),
+  } as TownSnapshot;
+}
 
 export function useTown() {
   const [state, setState] = useState<TownSnapshot | null>(null);
@@ -16,17 +51,8 @@ export function useTown() {
         if (!prev) return prev;
         const type = ev.type as string;
         switch (type) {
-          case "order": {
-            const { id, act, place, secs: _secs } = ev as { id: string; act: string; place: string; secs: number };
-            return {
-              ...prev,
-              herd: prev.herd.map((h) =>
-                h.id === id
-                  ? { ...h, mind: { ...h.mind, doing: { ...h.mind.doing, act, place, placeName: place, since: Date.now() } } }
-                  : h
-              ),
-            } as TownSnapshot;
-          }
+          case "order":
+            return patchOrder(prev, ev);
           case "post": {
             const post = (ev as { post: Post }).post;
             return { ...prev, feed: [post, ...prev.feed].slice(0, 400) } as TownSnapshot;

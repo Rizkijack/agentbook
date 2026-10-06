@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HermesbookClient } from "../src/client.js";
+import { SlopAgentbookClient } from "../src/client.js";
 import { METHOD_NOT_FOUND, McpDispatcher, PROTOCOL_VERSION } from "../src/protocol.js";
 import { cleanEnv } from "./fixtures.js";
 
@@ -14,18 +14,20 @@ const EXPECTED_TOOLS = [
   "quests_list",
   "quest_claim",
   "events_since",
+  "chat_send",
+  "chat_history",
 ];
 
 const EXPECTED_RESOURCES = [
-  "hermesbook://world",
-  "hermesbook://feed",
-  "hermesbook://quests",
-  "hermesbook://boards",
+  "slopagentbook://world",
+  "slopagentbook://feed",
+  "slopagentbook://quests",
+  "slopagentbook://boards",
 ];
 
 function dispatcher(): McpDispatcher {
   // no token on purpose: list/initialize never need auth
-  return new McpDispatcher(new HermesbookClient("http://gw.test"));
+  return new McpDispatcher(new SlopAgentbookClient("http://gw.test"));
 }
 
 describe("McpDispatcher — protocol surface", () => {
@@ -43,12 +45,12 @@ describe("McpDispatcher — protocol surface", () => {
     expect(res!.error).toBeUndefined();
     expect(res!.result).toMatchObject({
       protocolVersion: PROTOCOL_VERSION,
-      serverInfo: { name: "hermesbook-mcp", version: "0.1.0" },
+      serverInfo: { name: "slopagentbook-mcp", version: "0.1.0" },
       capabilities: { tools: { listChanged: false } },
     });
   });
 
-  it("tools/list returns exactly the 10 contracted tools", async () => {
+  it("tools/list returns exactly the 12 contracted tools", async () => {
     const res = await dispatcher().handle({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     expect(res!.error).toBeUndefined();
     const tools = (res!.result as { tools: { name: string; description: string; inputSchema: { type: string } }[] }).tools;

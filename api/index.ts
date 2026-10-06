@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Vercel serverless entry — mounts the Express app from backend/src/server.ts
 // Route all /api/* here via vercel.json rewrites.
 import { app } from "../backend/src/server.js";

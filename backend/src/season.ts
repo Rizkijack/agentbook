@@ -20,7 +20,7 @@ import {
   type ContestStanding,
   type Season,
   type SeasonStanding,
-} from "@hermesbook/shared";
+} from "@slopagentbook/shared";
 
 // ---------------------------------------------------------------------------
 // the idempotency ledger

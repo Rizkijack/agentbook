@@ -4,8 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { act } from "react-dom/test-utils";
 import { WorldCanvas, pickContest, contestPhase } from "../src/canvas/WorldCanvas.js";
 import { ENTRANT_COLOR, RANK_COLORS } from "../src/canvas/engine.js";
+import { LOCATIONS } from "../src/canvas/locationsData.js";
+import { V } from "../src/canvas/constants.js";
 import { parseHash } from "../src/router/hash.js";
-import type { Contest, TownSnapshot } from "@hermesbook/shared";
+import type { Contest, TownSnapshot } from "@slopagentbook/shared";
 
 // 08 §13 — `contest-hud.test.ts`: the D9 state machine (idle → announced →
 // live → resolved → idle), the route that forces a contest, the diegetic marks
@@ -198,11 +200,25 @@ describe("HUD state machine (08 §10.1)", () => {
     expect(xf.contestColor("e1")).toBe(ENTRANT_COLOR);
     expect(xf.contestColor("b1")).toBeNull();
 
-    // and the name tag really is painted in it — but the barn (x≈700) sits just
-    // outside the default camera (viewLeft = 880), so the audience is culled like
-    // any off-screen sprite; pan west far enough to hold barn AND square first.
-    act(() => { xf.panBy(400, 0); });
-
+    // and the name tag really is painted in it — the barn sits west AND north of
+    // the square, far enough that it is culled like any off-screen sprite. The
+    // camera opens on the square (CAM_HOME is derived from it), so move it to
+    // the midpoint of the two residents' arrival spots. Derived from the map
+    // rather than a magic pixel count, so it survives the map growing again.
+    const spotPx = (id: string) => {
+      const l = LOCATIONS.find((x) => x.id === id)!;
+      return { x: l.spot[0] * V, y: l.spot[1] * V };
+    };
+    const sq = spotPx("square");
+    const bn = spotPx("barn");
+    // panBy's sign is screen-space: a positive dx drags the view WEST (left),
+    // which is how the original test reached a barn that sits west of the square.
+    // The camera opens on the square, so it has to travel toward the barn.
+    act(() => {
+      xf.panBy(sq.x - (bn.x + sq.x) / 2, sq.y - (bn.y + sq.y) / 2);
+    });
+    // the camera eases toward its target rather than snapping
+    await paintFrame();
     await paintFrame();
     const alpha = labels.filter((l) => l.text === "Alpha");
     expect(alpha.length).toBeGreaterThan(0);
@@ -210,6 +226,41 @@ describe("HUD state machine (08 §10.1)", () => {
     const by = labels.filter((l) => l.text === "Bystander");
     expect(by.length).toBeGreaterThan(0);
     for (const l of by) expect(l.fill).not.toBe(ENTRANT_COLOR);
+  });
+
+  it("drops name tags when zoomed out, but keeps the one you are following", async () => {
+    // A tag is a fixed 8 screen px, so pulling back makes it cover MORE world,
+    // not less. At MIN_ZOOM the town is a quarter of the map and 64 tags
+    // stacked over it — the labels hid the thing they were labelling. They now
+    // fade in as you zoom in, and the followed resident is exempt because that
+    // is the tag the player is actually tracking.
+    mount(snap());
+    const xf = xfOf();
+
+    // Zoom first, follow second: manual zoom deliberately releases follow (that
+    // is the "manual input wins over follow mode" rule), so setting it before
+    // would be undone by the zoom that follows.
+    const tagsAt = async (zoom: number, follow: string | null) => {
+      act(() => { xf.zoomAt(VIEW_W / 2, VIEW_H / 2, zoom / xf.cam.zoom); });
+      xf.cam.zoom = xf.cam.tz = zoom;
+      xf.setFollow(follow);
+      await paintFrame();
+      await paintFrame();
+      return labels.map((l) => l.text);
+    };
+
+    const near = await tagsAt(1, "e1");
+    expect(near, "no tags at reading zoom").toContain("Alpha");
+    expect(near, "no tags at reading zoom").toContain("Beta");
+
+    const far = await tagsAt(0.45, "e1");
+    expect(far, "tags should drop when zoomed out").not.toContain("Beta");
+    expect(far, `the followed resident must keep their tag at any zoom (followId=${xf.followId})`).toContain("Alpha");
+
+    // and with nobody followed, low zoom is genuinely silent
+    const farFree = await tagsAt(0.45, null);
+    expect(farFree, "free cam at low zoom should draw no resident tags").not.toContain("Alpha");
+    expect(farFree, "free cam at low zoom should draw no resident tags").not.toContain("Beta");
   });
 
   it("live: thin bar with timer and standings, ranked by venue attendance", () => {

@@ -6,11 +6,17 @@ dist
 data/town.json
 data/town.backup.json
 data/town.tmp.*
+data/*.bak
 frontend/dist
 backend/dist
 shared/dist
+# tsc incremental build info — stale copies silently break builds
+*.tsbuildinfo
 .DS_Store
 .vercel
 
-# tsc incremental build info — stale copies silently break builds
-*.tsbuildinfo
+# Local working notes, not project state. AGENTS.md is agent instructions and
+# IDEA.md is a scratch pad — both are per-machine context, and this repo is
+# public, so neither belongs in the history.
+AGENTS.md
+IDEA.md

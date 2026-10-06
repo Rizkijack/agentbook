@@ -1,7 +1,39 @@
 {
   "extends": "./tsconfig.base.json",
+  // WHY THIS FILE LOOKS LIKE THIS: it is the config `npx vercel build` uses to
+  // type-check `api/index.ts` and everything it imports (backend/src/**).
+  // @vercel/node compiles with an empty `files`/`include` and its own host, so
+  // the per-package configs (backend/tsconfig.json …) never apply here. Two
+  // consequences, both fixed below — verify with `npx vercel build`, which must
+  // report 0 lines of `error TS` (it reported 37 in backend/src/gateway.ts
+  // before). Local `tsc -p backend/tsconfig.json --noEmit` stays the source of
+  // truth for day-to-day work; this file only has to keep Vercel's check honest.
   "compilerOptions": {
-    "composite": true
+    "composite": true,
+    // Restated from tsconfig.base.json on purpose: Vercel's config reader injects
+    // strict=false when it cannot see a `module` in the RAW config (before
+    // `extends` is resolved). Declaring `module` below takes that branch out of
+    // play, and this line documents that strictness is required, not accidental.
+    "strict": true,
+    // Must be explicit and set before Vercel reads the config; NodeNext is also
+    // the value @vercel/node falls back to, so emitted-module behaviour is
+    // unchanged — only the stray `strict=false` injection disappears.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    // @vercel/node's language-service host does not implement realpath, so the
+    // pnpm junctions under backend/node_modules/@types are never dereferenced:
+    // @types/express loses its siblings and Request/Response collapse into
+    // member-less interfaces, surfacing as 37 bogus TS2339 in gateway.ts.
+    // Point them at pnpm's hidden-hoist store (version-free, so upgrades keep
+    // working). If this repo ever moves off pnpm's default hoisting, replace
+    // with `public-hoist-pattern: ['@types/*']` in pnpm-workspace.yaml and
+    // re-run `npx vercel build`.
+    "paths": {
+      "express-serve-static-core": ["./node_modules/.pnpm/node_modules/@types/express-serve-static-core"],
+      "body-parser": ["./node_modules/.pnpm/node_modules/@types/body-parser"],
+      "qs": ["./node_modules/.pnpm/node_modules/@types/qs"],
+      "serve-static": ["./node_modules/.pnpm/node_modules/@types/serve-static"]
+    }
   },
   "references": [
     { "path": "./shared" },

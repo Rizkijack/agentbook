@@ -1,4 +1,4 @@
-import type { TownSnapshot, Quest } from "@hermesbook/shared";
+import type { TownSnapshot, Quest } from "@slopagentbook/shared";
 import { useState } from "react";
 
 function diffLabel(expiresAt: number | null): string {

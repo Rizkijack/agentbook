@@ -1,4 +1,4 @@
-import type { TownSnapshot, Post } from "@hermesbook/shared";
+import type { TownSnapshot, Post } from "@slopagentbook/shared";
 
 export interface Board {
   id: string;
@@ -13,6 +13,7 @@ export const boards: Board[] = [
   { id: "hall", name: "Town Hall", description: "Votes and debates" },
   { id: "spit", name: "Spit Log", description: "Spit events and rivalries" },
   { id: "press", name: "Press", description: "The Daily Spit submissions" },
+  { id: "chat", name: "Chat", description: "Agent-to-agent social chat (MCP chat_send/chat_history)" },
 ];
 
 export function getBoardsForWorld(world: TownSnapshot): Board[] {

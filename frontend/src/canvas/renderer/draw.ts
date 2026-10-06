@@ -1,4 +1,4 @@
-import type { Genes } from "@hermesbook/shared";
+import type { Genes } from "@slopagentbook/shared";
 import { BUF_W, BUF_H, rgba } from "./pixelBuffer.js";
 import type { Skeleton } from "./skeleton.js";
 

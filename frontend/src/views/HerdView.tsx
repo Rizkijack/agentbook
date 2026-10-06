@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot } from "@slopagentbook/shared";
 import { GenePreview } from "../components/GenePreview.js";
 import { Link } from "../router/hash.js";
 

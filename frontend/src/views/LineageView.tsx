@@ -1,4 +1,4 @@
-import type { TownSnapshot, Resident } from "@hermesbook/shared";
+import type { TownSnapshot, Resident } from "@slopagentbook/shared";
 import { Link } from "../router/hash.js";
 
 function buildTree(herd: Resident[]): Map<string, Resident[]> {

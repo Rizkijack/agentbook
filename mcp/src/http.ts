@@ -1,4 +1,4 @@
-import { HermesbookClient } from "./client.js";
+import { SlopAgentbookClient } from "./client.js";
 import { McpDispatcher, type JsonRpcMessage, type JsonRpcResponse } from "./protocol.js";
 
 /**
@@ -6,14 +6,21 @@ import { McpDispatcher, type JsonRpcMessage, type JsonRpcResponse } from "./prot
  * answered with `application/json`. GET/DELETE streams are not implemented, so the
  * server never opens an SSE channel back to the client.
  *
- * One HermesbookClient is shared for the lifetime of the handler: a client that calls
- * `join_town` keeps its token for the next request (the gateway token itself is only
- * ever returned once). Pass `createClient` to opt out — tests do exactly that.
+ * Token discipline: the transport is stateless, so a client may never outlive the
+ * request that proved ownership of it. Every POST gets a fresh SlopAgentbookClient —
+ * precedence `Authorization: Bearer <token>` header of THIS call > env
+ * SLOPAGENTBOOK_TOKEN — and `join_town` only shares its token with the rest of the
+ * same request (a JSON-RPC batch). The gateway token is returned once; the caller
+ * sends it back as the Authorization header on the next call. A single shared
+ * client would let caller A's `join_town` token authenticate caller B's `act`.
+ * Pass `createClient` to inject — tests do exactly that.
  */
 
 export interface HttpReqLike {
   method?: string;
   body?: unknown;
+  /** Express/Node headers — optional so bare test stubs keep compiling. */
+  headers?: Record<string, string | string[] | undefined>;
 }
 
 export interface HttpResLike {
@@ -27,9 +34,7 @@ export type McpHttpHandler = (req: HttpReqLike, res: HttpResLike) => Promise<voi
 
 const CONTENT_TYPE = "Content-Type";
 
-export function createMcpHttpHandler(createClient: () => HermesbookClient = () => new HermesbookClient()): McpHttpHandler {
-  const client = createClient();
-
+export function createMcpHttpHandler(createClient: () => SlopAgentbookClient = () => new SlopAgentbookClient()): McpHttpHandler {
   return async function mcpHttp(req: HttpReqLike, res: HttpResLike): Promise<void> {
     if ((req.method ?? "GET").toUpperCase() !== "POST") {
       res.status(405).set("Allow", "POST").json({
@@ -50,6 +55,12 @@ export function createMcpHttpHandler(createClient: () => HermesbookClient = () =
       sendJsonRpc(res, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "missing body" } });
       return;
     }
+
+    // Fresh client per request: no token may outlive the call that carried it
+    // (see the file header). Bearer header of THIS call wins over the env default.
+    const client = createClient();
+    const bearer = bearerToken(req.headers);
+    if (bearer) client.token = bearer;
 
     // each request gets a fresh dispatcher (stateless): initialize is not required
     // before tools/list, and no session id is negotiated.
@@ -94,4 +105,12 @@ async function safeHandle(dispatcher: McpDispatcher, message: JsonRpcMessage): P
 
 function sendJsonRpc(res: HttpResLike, body: JsonRpcResponse | JsonRpcResponse[]): void {
   res.status(200).set(CONTENT_TYPE, "application/json; charset=utf-8").json(body);
+}
+
+/** `Authorization: Bearer <token>` from this request's headers, if present. */
+function bearerToken(headers?: Record<string, string | string[] | undefined>): string | undefined {
+  const raw = headers?.authorization ?? headers?.Authorization;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const m = /^Bearer\s+(.+)$/i.exec((value ?? "").trim());
+  return m ? m[1]!.trim() : undefined;
 }

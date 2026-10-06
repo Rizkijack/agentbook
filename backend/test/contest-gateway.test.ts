@@ -24,7 +24,7 @@ const { createInitialWorld } = await import("../src/world.js");
 const { joinWorld } = await import("../src/agents.js");
 const { ensureHouseResidents } = await import("../src/houseagents.js");
 const { announceContest, tickTournament } = await import("../src/tournament.js");
-const { CONTEST } = await import("@hermesbook/shared");
+const { CONTEST } = await import("@slopagentbook/shared");
 
 const T0 = 1_700_000_000_000;
 const TICK = 1_800;
@@ -58,7 +58,7 @@ describe("POST /api/agent/contest/register", () => {
     announceContest(world, T0);
     const res = await request(app)
       .post("/api/agent/contest/register")
-      .set("Authorization", "Bearer hbk_deadbeef");
+      .set("Authorization", "Bearer sabk_deadbeef");
     expect(res.status).toBe(401);
   });
 

@@ -1,8 +1,10 @@
-import type { TownSnapshot, Quest } from "@hermesbook/shared";
+import type { TownSnapshot, Quest } from "@slopagentbook/shared";
 import { WorldCanvas } from "../canvas/WorldCanvas.js";
+import { Pe, vt, WorldWidth, WorldHeight } from "../canvas/constants.js";
+import { LOCATIONS } from "../canvas/locationsData.js";
 import { Link } from "../router/hash.js";
 
-export function TownView({ snapshot, onPick }: { snapshot: TownSnapshot; onPick?: (id: string) => void }) {
+export function TownView({ snapshot, onPick, onFollowChange }: { snapshot: TownSnapshot; onPick?: (id: string) => void; onFollowChange?: (id: string | null) => void }) {
   const counts = new Map<string, number>();
   for (const h of snapshot.herd) counts.set(h.mind.doing.place, (counts.get(h.mind.doing.place) ?? 0) + 1);
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
@@ -13,7 +15,7 @@ export function TownView({ snapshot, onPick }: { snapshot: TownSnapshot; onPick?
 
   return (
     <div className="stagger">
-      <WorldCanvas snapshot={snapshot} onPick={onPick} />
+      <WorldCanvas snapshot={snapshot} onPick={onPick} onFollowChange={onFollowChange} />
 
       {/* halaman — bento editorial, not 3 equal cards */}
       <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
@@ -35,13 +37,13 @@ export function TownView({ snapshot, onPick }: { snapshot: TownSnapshot; onPick?
             </div>
             <div style={{ marginTop: 14, height: 1, background: "var(--hair)", opacity: 0.7 }} />
             <div className="mono" style={{ fontSize: 11, lineHeight: 1.6, color: "var(--ink-2)", marginTop: 12, maxWidth: "56ch" }}>
-              A 210×128-tile map, 26 houses with climate architecture — stone Civic, warm wood Social, red brick Rest. NPCs roam free on thirst/hunger/social instincts.
+              A {Pe}×{vt}-tile map, {LOCATIONS.length} buildings with climate architecture — stone Civic, warm wood Social, red brick Rest. NPCs roam free on thirst/hunger/social instincts.
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", borderTop: "1px solid var(--hair)", background: "color-mix(in srgb, var(--mark) 55%, var(--paper-2) 45%)" }}>
             <div style={{ padding: "10px 14px", borderRight: "1px solid var(--hair)" }}>
               <div className="mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--faint)" }}>TERRITORY</div>
-              <div className="mono" style={{ fontSize: 12, marginTop: 4 }}>210×128 · 3360×2048 px</div>
+              <div className="mono" style={{ fontSize: 12, marginTop: 4 }}>{Pe}×{vt} · {WorldWidth}×{WorldHeight} px</div>
             </div>
             <div style={{ padding: "10px 14px" }}>
               <div className="mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--faint)" }}>WEATHER</div>
@@ -84,7 +86,7 @@ export function TownView({ snapshot, onPick }: { snapshot: TownSnapshot; onPick?
               ))}
               {snapshot.events.length === 0 && snapshot.feed.length === 0 && <span className="mono muted" style={{ fontSize: 11 }}>quiet this morning</span>}
             </div>
-            <div className="mono" style={{ fontSize: 10, color: "var(--faint)", marginTop: 10, borderTop: "1px solid var(--hair)", paddingTop: 8 }}>26 houses 52×58 dual-brain bot</div>
+            <div className="mono" style={{ fontSize: 10, color: "var(--faint)", marginTop: 10, borderTop: "1px solid var(--hair)", paddingTop: 8 }}>{LOCATIONS.length} buildings 52×58 dual-brain bot</div>
           </div>
         </div>
       </div>

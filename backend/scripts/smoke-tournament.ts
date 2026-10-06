@@ -23,8 +23,8 @@ import {
   tickTournament,
   upcomingContest,
 } from "../src/tournament.js";
-import { CONTEST, SEASON, pointsForRank } from "@hermesbook/shared";
-import type { Contest, Season, TownSnapshot } from "@hermesbook/shared";
+import { CONTEST, SEASON, pointsForRank } from "@slopagentbook/shared";
+import type { Contest, Season, TownSnapshot } from "@slopagentbook/shared";
 
 // Aligned to a `DAY_LENGTH_SEC` (900s) boundary. The raw `1_700_000_000_000`
 // sits 800s into its in-game day, and a slot is 241s — so the second contest

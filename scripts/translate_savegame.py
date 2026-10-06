@@ -1,4 +1,4 @@
-"""Translate residual Indonesian in hermesbook savegame + quest def to English.
+"""Translate residual Indonesian in agentbook savegame + quest def to English.
 
 Only touches display strings (text/description/title). World/agent ids untouched.
 """
@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path("G:/PROJECT/hermesbook")
+ROOT = Path("G:/PROJECT/agentbook")
 
 # Exact phrase swaps (Indonesian -> English), applied to display strings only.
 SWAPS = [

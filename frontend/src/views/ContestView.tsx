@@ -1,4 +1,4 @@
-import type { TownSnapshot, Contest, ContestKind, Season } from "@hermesbook/shared";
+import type { TownSnapshot, Contest, ContestKind, Season } from "@slopagentbook/shared";
 import { TownView } from "./TownView.js";
 import { Link } from "../router/hash.js";
 import { liveStandings } from "../canvas/WorldCanvas.js";

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { decide } from "../src/simbrain.js";
+import { NPC_SOCIAL_PLACES, NPC_FOOD_PLACES } from "@slopagentbook/shared";
 
 describe("SimBrain decide", () => {
   it("night + tired >0.3 -> barn", () => {
@@ -19,8 +20,10 @@ describe("SimBrain decide", () => {
     expect(square).toBeGreaterThan(40);
   });
 
-  it("hunger >0.6 -> one of trough/meadowW/meadowE/orchard", () => {
-    const opts = new Set(["trough", "meadowW", "meadowE", "orchard"]);
+  it("hunger >0.6 -> one of the food places", () => {
+    // the group is machine-owned (shared/src/skills.ts) — a hard-coded copy here
+    // went stale the moment the town grew from 42 to 99 locations
+    const opts = new Set<string>(NPC_FOOD_PLACES);
     for (let i = 0; i < 20; i++) {
       const d = decide({ needs: { hunger: 0.8, thirst: 0.1, tired: 0.1, lonely: 0.1 }, clock: 0.3, location: "square", nearbyAgents: [], rng: () => Math.random() });
       expect(opts.has(d.place)).toBe(true);
@@ -29,7 +32,9 @@ describe("SimBrain decide", () => {
   });
 
   it("lonely -> social places", () => {
-    const opts = new Set(["square", "tavern", "hall", "baths", "fire", "market", "board"]);
+    // the group is machine-owned (shared/src/skills.ts) — a hard-coded copy here
+    // went stale the moment the town grew, so assert against the source instead
+    const opts = new Set<string>(NPC_SOCIAL_PLACES);
     for (let i = 0; i < 20; i++) {
       const d = decide({ needs: { hunger: 0.1, thirst: 0.1, tired: 0.1, lonely: 0.8 }, clock: 0.2, location: "square", nearbyAgents: [], rng: () => Math.random() });
       expect(opts.has(d.place)).toBe(true);

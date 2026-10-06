@@ -149,16 +149,21 @@ export const CONTEST_VENUES: Record<ContestKind, readonly string[]> = {
   endure: ["square"],
 };
 
+/**
+ * Defaults for a NEW town. An existing town keeps whatever config its save
+ * carries — this is a default, never a migration — so a rebrand here does not
+ * rewrite towns that are already running.
+ */
 export const defaultConfig: TownConfig = {
-  name: "Hermesbook",
-  ticker: "HERMES",
+  name: "SlopAgentbook",
+  ticker: "SLB",
   tokenAddress: "TLJ8QbLnNUxZJJ1dcqF9auUKHrtKd8aNUkscxhSDADj",
   chainName: "Base",
   network: "mainnet",
   rpcUrl: "https://mainnet.base.org",
   explorer: "https://basescan.org/token/TLJ8QbLnNUxZJJ1dcqF9auUKHrtKd8aNUkscxhSDADj",
   dexUrl: "https://dexscreener.com/base/",
-  xUrl: "https://x.com/hermesbook",
+  xUrl: "https://x.com/slopagentbook",
   brain: "llm",
   forkCost: "Free",
   maxHerd: 64,

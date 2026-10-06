@@ -1,0 +1,488 @@
+/**
+ * Source of truth for the road network and the forest zones.
+ *
+ * These two tables used to have no home in the repository at all. They lived in
+ * a scratch verifier under the OS temp directory, and
+ * scripts/emit-scenery-data.mjs read it back out with `readFileSync` plus a
+ * `new Function` evaluation of the array literals it found. When that scratch
+ * file was cleaned up the generator started throwing ENOENT and nobody noticed,
+ * because the only surviving copies were the blocks it had already emitted into
+ * shared/src/map.ts and frontend/src/canvas/scenery.ts. Regeneration had been
+ * dead for the whole life of the 5x map.
+ *
+ * So the tables now live here, in the repo, as the input side of the generator.
+ * scripts/emit-scenery-data.mjs reads this module and rewrites the
+ * `// @generated:*` blocks that consumers import; the blocks are a projection of
+ * this file, never the place to edit a coordinate.
+ *
+ * COORDINATES ARE IN FINAL 5x WORLD UNITS (1050x640 tiles) AND ARE THE VALUES
+ * AS EMITTED. The old generator evaluated the source arrays with `new Function`
+ * and two injected constants, `DX = 419` / `DY = 253`, which were subtracted or
+ * added into the literals at evaluation time. That translation was a one-off
+ * from moving the original 42 locations into the 5x map; the numbers written
+ * below already include it. The knob is deliberately gone rather than re-applied
+ * — applying it again would push the whole network 419 tiles east and 253 south,
+ * off the map. There is nothing left to parameterise.
+ *
+ * SHAPE OF THE NETWORK. It is a street grid, not a road through country. Twelve
+ * east-west corridors and twenty-odd north-south ones are cut into block-sized
+ * pieces at every junction, so an arterial crosses the map as a sequence of short
+ * named streets instead of one unbroken run - the 990-tile "North Ring" is now
+ * eleven segments. Two ring levels exist: the outer ring at the map edge and an
+ * inner orbital around the town at x 420..660 / y 201..464, which is what lets
+ * cross-town traffic avoid the perimeter. Every district is on the grid, and
+ * shared/test/road-network.test.ts proves each one still has two independent
+ * routes to the core.
+ *
+ * Three bands in the layout are load-bearing rather than arbitrary.
+ * riverRun/riverMouth (x 60..69) block every crossing between y=180 and y=439, so
+ * the bridges at y=325 and y=333 are the only way across south of the north bank.
+ * eastFen (x 950..967, y 330..419) does the same, which is why the eastern
+ * approach crosses at y=440 rather than following the orbital south. And the town
+ * centre's 40 buildings pack a 190x96 parcel tight enough that only four
+ * east-west bands (y=270, 302, 328, 366) and a handful of north-south corridors
+ * are physically available; those are the downtown block edges.
+ */
+
+/** One named road segment, in tile coordinates. Always 2 tiles wide. */
+export interface RoadSegment {
+  readonly name: string;
+  readonly x1: number;
+  readonly y1: number;
+  readonly x2: number;
+  readonly y2: number;
+  /**
+   * True when the segment belongs to CORE_ROADS: the subset that gets traffic
+   * lights and street lamps. Signalling every rural crossroads made the map
+   * read like an airport, so only the town-centre grid carries signals.
+   */
+  readonly core: boolean;
+}
+
+/** The road network, in emission order. 35 segments. */
+export const ROAD_SEGMENTS: readonly RoadSegment[] = [
+  { name: "North Ring", x1: 30, y1: 60, x2: 88, y2: 61, core: false },
+  { name: "North Ring", x1: 88, y1: 60, x2: 206, y2: 61, core: false },
+  { name: "North Ring", x1: 206, y1: 60, x2: 345, y2: 61, core: false },
+  { name: "North Ring", x1: 345, y1: 60, x2: 420, y2: 61, core: false },
+  { name: "North Ring", x1: 420, y1: 60, x2: 448, y2: 61, core: false },
+  { name: "North Ring", x1: 448, y1: 60, x2: 560, y2: 61, core: false },
+  { name: "North Ring", x1: 560, y1: 60, x2: 660, y2: 61, core: false },
+  { name: "North Ring", x1: 660, y1: 60, x2: 726, y2: 61, core: false },
+  { name: "North Ring", x1: 726, y1: 60, x2: 772, y2: 61, core: false },
+  { name: "North Ring", x1: 772, y1: 60, x2: 900, y2: 61, core: false },
+  { name: "North Ring", x1: 900, y1: 60, x2: 1019, y2: 61, core: false },
+  { name: "Northgate Blvd", x1: 30, y1: 166, x2: 71, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 71, y1: 166, x2: 88, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 88, y1: 166, x2: 145, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 145, y1: 166, x2: 206, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 206, y1: 166, x2: 268, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 268, y1: 166, x2: 345, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 345, y1: 166, x2: 420, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 420, y1: 166, x2: 448, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 448, y1: 166, x2: 560, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 560, y1: 166, x2: 620, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 620, y1: 166, x2: 660, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 660, y1: 166, x2: 726, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 726, y1: 166, x2: 772, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 772, y1: 166, x2: 842, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 842, y1: 166, x2: 900, y2: 167, core: false },
+  { name: "Northgate Blvd", x1: 900, y1: 166, x2: 1019, y2: 167, core: false },
+  { name: "Gatehouse Row", x1: 420, y1: 190, x2: 474, y2: 191, core: false },
+  { name: "Gatehouse Row", x1: 474, y1: 190, x2: 482, y2: 191, core: false },
+  { name: "Gatehouse Row", x1: 482, y1: 190, x2: 546, y2: 191, core: false },
+  { name: "Gatehouse Row", x1: 546, y1: 190, x2: 557, y2: 191, core: false },
+  { name: "Gatehouse Row", x1: 557, y1: 190, x2: 570, y2: 191, core: false },
+  { name: "Gatehouse Row", x1: 570, y1: 190, x2: 575, y2: 191, core: false },
+  { name: "Gatehouse Row", x1: 575, y1: 190, x2: 615, y2: 191, core: false },
+  { name: "Gatehouse Row", x1: 615, y1: 190, x2: 620, y2: 191, core: false },
+  { name: "Gatehouse Row", x1: 620, y1: 190, x2: 660, y2: 191, core: false },
+  { name: "Riverbank Rd", x1: 71, y1: 201, x2: 88, y2: 202, core: false },
+  { name: "West Approach", x1: 88, y1: 201, x2: 145, y2: 202, core: false },
+  { name: "Ironworks Way", x1: 145, y1: 201, x2: 206, y2: 202, core: false },
+  { name: "Kiln Row", x1: 206, y1: 201, x2: 268, y2: 202, core: false },
+  { name: "Quarry Way", x1: 268, y1: 201, x2: 345, y2: 202, core: false },
+  { name: "West Orbital", x1: 345, y1: 201, x2: 420, y2: 202, core: false },
+  { name: "Tollhouse Row", x1: 420, y1: 201, x2: 433, y2: 202, core: true },
+  { name: "West Loop", x1: 433, y1: 201, x2: 474, y2: 202, core: true },
+  { name: "Exchange Rd", x1: 474, y1: 201, x2: 482, y2: 202, core: true },
+  { name: "North St", x1: 482, y1: 201, x2: 546, y2: 202, core: true },
+  { name: "Chapel Row", x1: 546, y1: 201, x2: 557, y2: 202, core: true },
+  { name: "Press Row", x1: 557, y1: 201, x2: 570, y2: 202, core: true },
+  { name: "Station Row", x1: 570, y1: 201, x2: 575, y2: 202, core: true },
+  { name: "Chapel Rise", x1: 575, y1: 201, x2: 615, y2: 202, core: true },
+  { name: "Rosewalk Way", x1: 615, y1: 201, x2: 620, y2: 202, core: true },
+  { name: "East Orbital", x1: 620, y1: 201, x2: 660, y2: 202, core: true },
+  { name: "Commons Way", x1: 660, y1: 201, x2: 726, y2: 202, core: false },
+  { name: "Greenhouse Row", x1: 726, y1: 201, x2: 772, y2: 202, core: false },
+  { name: "Bandstand Row", x1: 772, y1: 201, x2: 842, y2: 202, core: false },
+  { name: "Aviary Row", x1: 842, y1: 201, x2: 900, y2: 202, core: false },
+  { name: "College Ave", x1: 900, y1: 201, x2: 1019, y2: 202, core: false },
+  { name: "Meadow Bank", x1: 71, y1: 253, x2: 88, y2: 254, core: false },
+  { name: "Wharf Approach", x1: 88, y1: 253, x2: 145, y2: 254, core: false },
+  { name: "Forge Row", x1: 145, y1: 253, x2: 206, y2: 254, core: false },
+  { name: "Slag Way", x1: 206, y1: 253, x2: 268, y2: 254, core: false },
+  { name: "Orchard Rd", x1: 268, y1: 253, x2: 345, y2: 254, core: false },
+  { name: "West Orbital S", x1: 345, y1: 253, x2: 420, y2: 254, core: false },
+  { name: "North St", x1: 420, y1: 253, x2: 433, y2: 254, core: true },
+  { name: "Tannery Row", x1: 433, y1: 253, x2: 474, y2: 254, core: true },
+  { name: "Centre Way", x1: 474, y1: 253, x2: 482, y2: 254, core: true },
+  { name: "Chapel Row", x1: 482, y1: 253, x2: 546, y2: 254, core: true },
+  { name: "Station Approach", x1: 546, y1: 253, x2: 557, y2: 254, core: true },
+  { name: "Library Row", x1: 557, y1: 253, x2: 570, y2: 254, core: true },
+  { name: "Press Row", x1: 570, y1: 253, x2: 575, y2: 254, core: true },
+  { name: "Station Row", x1: 575, y1: 253, x2: 615, y2: 254, core: true },
+  { name: "Meadow East", x1: 615, y1: 253, x2: 620, y2: 254, core: true },
+  { name: "East Orbital", x1: 620, y1: 253, x2: 660, y2: 254, core: true },
+  { name: "Commons Rd", x1: 660, y1: 253, x2: 726, y2: 254, core: false },
+  { name: "Hedge Row", x1: 726, y1: 253, x2: 772, y2: 254, core: false },
+  { name: "Bandstand Row", x1: 772, y1: 253, x2: 842, y2: 254, core: false },
+  { name: "Aviary Row", x1: 842, y1: 253, x2: 900, y2: 254, core: false },
+  { name: "College Ave", x1: 900, y1: 253, x2: 1019, y2: 254, core: false },
+  { name: "Wharf Bridge", x1: 30, y1: 325, x2: 71, y2: 326, core: false },
+  { name: "Wharf Bridge", x1: 71, y1: 325, x2: 88, y2: 326, core: false },
+  { name: "Wharf Bridge", x1: 88, y1: 325, x2: 145, y2: 326, core: false },
+  { name: "Lower Bridge", x1: 30, y1: 333, x2: 71, y2: 334, core: false },
+  { name: "Lower Bridge", x1: 71, y1: 333, x2: 88, y2: 334, core: false },
+  { name: "Lower Bridge", x1: 88, y1: 333, x2: 145, y2: 334, core: false },
+  { name: "West Bank", x1: 71, y1: 366, x2: 88, y2: 367, core: false },
+  { name: "Netloft Rd", x1: 88, y1: 366, x2: 145, y2: 367, core: false },
+  { name: "Salt Rd", x1: 145, y1: 366, x2: 206, y2: 367, core: false },
+  { name: "Chandlery Rd", x1: 206, y1: 366, x2: 268, y2: 367, core: false },
+  { name: "Wharf Rd", x1: 268, y1: 366, x2: 345, y2: 367, core: false },
+  { name: "West Orbital T", x1: 345, y1: 366, x2: 420, y2: 367, core: false },
+  { name: "Orchard Row", x1: 420, y1: 366, x2: 433, y2: 367, core: true },
+  { name: "West Loop", x1: 433, y1: 366, x2: 482, y2: 367, core: true },
+  { name: "Exchange Row", x1: 482, y1: 366, x2: 546, y2: 367, core: true },
+  { name: "Chapel Row", x1: 546, y1: 366, x2: 575, y2: 367, core: true },
+  { name: "Station Row", x1: 575, y1: 366, x2: 615, y2: 367, core: true },
+  { name: "Meadow East", x1: 615, y1: 366, x2: 620, y2: 367, core: true },
+  { name: "East Orbital T", x1: 620, y1: 366, x2: 660, y2: 367, core: true },
+  { name: "Commons Way", x1: 660, y1: 366, x2: 726, y2: 367, core: false },
+  { name: "Hollowmere Rd", x1: 726, y1: 366, x2: 772, y2: 367, core: false },
+  { name: "Hollow Lane", x1: 772, y1: 366, x2: 842, y2: 367, core: false },
+  { name: "Hollow Row", x1: 842, y1: 366, x2: 900, y2: 367, core: false },
+  { name: "Wharf Way", x1: 88, y1: 411, x2: 145, y2: 412, core: false },
+  { name: "Wharf Way", x1: 145, y1: 411, x2: 206, y2: 412, core: false },
+  { name: "Wharf Way", x1: 206, y1: 411, x2: 268, y2: 412, core: false },
+  { name: "Wharf Way", x1: 268, y1: 411, x2: 345, y2: 412, core: false },
+  { name: "Wharf Way", x1: 345, y1: 411, x2: 420, y2: 412, core: false },
+  { name: "Wharf Way", x1: 420, y1: 411, x2: 482, y2: 412, core: true },
+  { name: "Wharf Way", x1: 482, y1: 411, x2: 575, y2: 412, core: true },
+  { name: "Wharf Way", x1: 575, y1: 411, x2: 660, y2: 412, core: true },
+  { name: "Wharf Way", x1: 660, y1: 411, x2: 726, y2: 412, core: false },
+  { name: "Wharf Way", x1: 726, y1: 411, x2: 772, y2: 412, core: false },
+  { name: "Wharf Way", x1: 772, y1: 411, x2: 842, y2: 412, core: false },
+  { name: "Wharf Way", x1: 842, y1: 411, x2: 900, y2: 412, core: false },
+  { name: "Fen Link", x1: 660, y1: 440, x2: 726, y2: 441, core: false },
+  { name: "Fen Link", x1: 726, y1: 440, x2: 772, y2: 441, core: false },
+  { name: "Fen Link", x1: 772, y1: 440, x2: 842, y2: 441, core: false },
+  { name: "Fen Link", x1: 842, y1: 440, x2: 900, y2: 441, core: false },
+  { name: "Fen Link", x1: 900, y1: 440, x2: 975, y2: 441, core: false },
+  { name: "Fen Link", x1: 975, y1: 440, x2: 1019, y2: 441, core: false },
+  { name: "Farm Belt Way", x1: 30, y1: 464, x2: 71, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 71, y1: 464, x2: 88, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 88, y1: 464, x2: 145, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 145, y1: 464, x2: 206, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 206, y1: 464, x2: 268, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 268, y1: 464, x2: 345, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 345, y1: 464, x2: 420, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 420, y1: 464, x2: 482, y2: 465, core: true },
+  { name: "Farm Belt Way", x1: 482, y1: 464, x2: 575, y2: 465, core: true },
+  { name: "Farm Belt Way", x1: 575, y1: 464, x2: 660, y2: 465, core: true },
+  { name: "Farm Belt Way", x1: 660, y1: 464, x2: 726, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 726, y1: 464, x2: 772, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 772, y1: 464, x2: 842, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 842, y1: 464, x2: 900, y2: 465, core: false },
+  { name: "Farm Belt Way", x1: 900, y1: 464, x2: 1019, y2: 465, core: false },
+  { name: "Peat Way", x1: 30, y1: 550, x2: 145, y2: 551, core: false },
+  { name: "Peat Way", x1: 145, y1: 550, x2: 212, y2: 551, core: false },
+  { name: "Peat Way", x1: 212, y1: 550, x2: 268, y2: 551, core: false },
+  { name: "Peat Way", x1: 268, y1: 550, x2: 345, y2: 551, core: false },
+  { name: "Peat Way", x1: 345, y1: 550, x2: 420, y2: 551, core: false },
+  { name: "Peat Way", x1: 420, y1: 550, x2: 482, y2: 551, core: false },
+  { name: "Peat Way", x1: 482, y1: 550, x2: 575, y2: 551, core: false },
+  { name: "Peat Way", x1: 575, y1: 550, x2: 726, y2: 551, core: false },
+  { name: "Peat Way", x1: 726, y1: 550, x2: 842, y2: 551, core: false },
+  { name: "Peat Way", x1: 842, y1: 550, x2: 900, y2: 551, core: false },
+  { name: "Peat Way", x1: 900, y1: 550, x2: 1019, y2: 551, core: false },
+  { name: "South Ring", x1: 30, y1: 592, x2: 71, y2: 593, core: false },
+  { name: "South Ring", x1: 71, y1: 592, x2: 88, y2: 593, core: false },
+  { name: "South Ring", x1: 88, y1: 592, x2: 145, y2: 593, core: false },
+  { name: "South Ring", x1: 145, y1: 592, x2: 268, y2: 593, core: false },
+  { name: "South Ring", x1: 268, y1: 592, x2: 345, y2: 593, core: false },
+  { name: "South Ring", x1: 345, y1: 592, x2: 420, y2: 593, core: false },
+  { name: "South Ring", x1: 420, y1: 592, x2: 482, y2: 593, core: false },
+  { name: "South Ring", x1: 482, y1: 592, x2: 575, y2: 593, core: false },
+  { name: "South Ring", x1: 575, y1: 592, x2: 726, y2: 593, core: false },
+  { name: "South Ring", x1: 726, y1: 592, x2: 772, y2: 593, core: false },
+  { name: "South Ring", x1: 772, y1: 592, x2: 842, y2: 593, core: false },
+  { name: "South Ring", x1: 842, y1: 592, x2: 900, y2: 593, core: false },
+  { name: "South Ring", x1: 900, y1: 592, x2: 1019, y2: 593, core: false },
+  { name: "Chapel Row", x1: 420, y1: 270, x2: 433, y2: 271, core: true },
+  { name: "Chapel Row", x1: 433, y1: 270, x2: 474, y2: 271, core: true },
+  { name: "Chapel Row", x1: 474, y1: 270, x2: 482, y2: 271, core: true },
+  { name: "Chapel Row", x1: 482, y1: 270, x2: 546, y2: 271, core: true },
+  { name: "Chapel Row", x1: 546, y1: 270, x2: 557, y2: 271, core: true },
+  { name: "Chapel Row", x1: 557, y1: 270, x2: 570, y2: 271, core: true },
+  { name: "Chapel Row", x1: 570, y1: 270, x2: 575, y2: 271, core: true },
+  { name: "Chapel Row", x1: 575, y1: 270, x2: 620, y2: 271, core: true },
+  { name: "Chapel Row", x1: 620, y1: 270, x2: 660, y2: 271, core: true },
+  { name: "Bank St", x1: 420, y1: 302, x2: 433, y2: 303, core: true },
+  { name: "Bank St", x1: 433, y1: 302, x2: 474, y2: 303, core: true },
+  { name: "Bank St", x1: 474, y1: 302, x2: 482, y2: 303, core: true },
+  { name: "Bank St", x1: 482, y1: 302, x2: 546, y2: 303, core: true },
+  { name: "Bank St E", x1: 557, y1: 302, x2: 570, y2: 303, core: true },
+  { name: "Bank St E", x1: 570, y1: 302, x2: 575, y2: 303, core: true },
+  { name: "Bank St E", x1: 575, y1: 302, x2: 592, y2: 303, core: true },
+  { name: "Bank St E", x1: 592, y1: 302, x2: 615, y2: 303, core: true },
+  { name: "Bank St E", x1: 615, y1: 302, x2: 620, y2: 303, core: true },
+  { name: "Bank St E", x1: 620, y1: 302, x2: 660, y2: 303, core: true },
+  { name: "Bank St E", x1: 660, y1: 302, x2: 700, y2: 303, core: false },
+  { name: "Bank St E", x1: 700, y1: 302, x2: 720, y2: 303, core: false },
+  { name: "Main St", x1: 420, y1: 328, x2: 433, y2: 329, core: true },
+  { name: "Main St E", x1: 482, y1: 328, x2: 546, y2: 329, core: true },
+  { name: "Main St E", x1: 546, y1: 328, x2: 557, y2: 329, core: true },
+  { name: "Main St E", x1: 557, y1: 328, x2: 570, y2: 329, core: true },
+  { name: "Main St E", x1: 570, y1: 328, x2: 575, y2: 329, core: true },
+  { name: "Main St E", x1: 575, y1: 328, x2: 592, y2: 329, core: true },
+  { name: "Main St E", x1: 592, y1: 328, x2: 615, y2: 329, core: true },
+  { name: "Main St E", x1: 615, y1: 328, x2: 620, y2: 329, core: true },
+  { name: "Main St E", x1: 620, y1: 328, x2: 660, y2: 329, core: true },
+  { name: "West Ring", x1: 30, y1: 60, x2: 31, y2: 166, core: false },
+  { name: "West Ring", x1: 30, y1: 166, x2: 31, y2: 325, core: false },
+  { name: "West Ring", x1: 30, y1: 325, x2: 31, y2: 333, core: false },
+  { name: "West Ring", x1: 30, y1: 333, x2: 31, y2: 464, core: false },
+  { name: "West Ring", x1: 30, y1: 464, x2: 31, y2: 592, core: false },
+  { name: "Riverside Lane", x1: 88, y1: 60, x2: 89, y2: 166, core: false },
+  { name: "Riverside Lane", x1: 88, y1: 166, x2: 89, y2: 201, core: false },
+  { name: "Riverside Lane", x1: 88, y1: 201, x2: 89, y2: 253, core: false },
+  { name: "Riverside Lane", x1: 88, y1: 253, x2: 89, y2: 325, core: false },
+  { name: "Riverside Lane", x1: 88, y1: 325, x2: 89, y2: 333, core: false },
+  { name: "Riverside Lane", x1: 88, y1: 333, x2: 89, y2: 366, core: false },
+  { name: "Riverside Lane", x1: 88, y1: 366, x2: 89, y2: 464, core: false },
+  { name: "Riverbank Rd", x1: 71, y1: 166, x2: 72, y2: 201, core: false },
+  { name: "Riverbank Rd", x1: 71, y1: 201, x2: 72, y2: 253, core: false },
+  { name: "Riverbank Rd", x1: 71, y1: 253, x2: 72, y2: 325, core: false },
+  { name: "Riverbank Rd", x1: 71, y1: 325, x2: 72, y2: 333, core: false },
+  { name: "Riverbank Rd", x1: 71, y1: 333, x2: 72, y2: 366, core: false },
+  { name: "Riverbank Rd", x1: 71, y1: 366, x2: 72, y2: 464, core: false },
+  { name: "Moor Lane", x1: 145, y1: 166, x2: 146, y2: 201, core: false },
+  { name: "Moor Lane", x1: 145, y1: 201, x2: 146, y2: 253, core: false },
+  { name: "Moor Lane", x1: 145, y1: 253, x2: 146, y2: 325, core: false },
+  { name: "Moor Lane", x1: 145, y1: 325, x2: 146, y2: 333, core: false },
+  { name: "Moor Lane", x1: 145, y1: 333, x2: 146, y2: 366, core: false },
+  { name: "Moor Lane", x1: 145, y1: 366, x2: 146, y2: 464, core: false },
+  { name: "Moor Lane", x1: 145, y1: 464, x2: 146, y2: 592, core: false },
+  { name: "Ironworks Spur", x1: 206, y1: 60, x2: 207, y2: 166, core: false },
+  { name: "Ironworks Spur", x1: 206, y1: 166, x2: 207, y2: 201, core: false },
+  { name: "Ironworks Spur", x1: 206, y1: 201, x2: 207, y2: 253, core: false },
+  { name: "Ironworks Spur", x1: 206, y1: 253, x2: 207, y2: 366, core: false },
+  { name: "Ironworks Spur", x1: 206, y1: 366, x2: 207, y2: 464, core: false },
+  { name: "Peat Track", x1: 212, y1: 464, x2: 213, y2: 550, core: false },
+  { name: "Peat Track", x1: 212, y1: 550, x2: 213, y2: 592, core: false },
+  { name: "Quarry Rd", x1: 268, y1: 166, x2: 269, y2: 201, core: false },
+  { name: "Quarry Rd", x1: 268, y1: 201, x2: 269, y2: 253, core: false },
+  { name: "Quarry Rd", x1: 268, y1: 253, x2: 269, y2: 366, core: false },
+  { name: "Quarry Rd", x1: 268, y1: 366, x2: 269, y2: 464, core: false },
+  { name: "Quarry Rd", x1: 268, y1: 464, x2: 269, y2: 592, core: false },
+  { name: "West Radial", x1: 345, y1: 60, x2: 346, y2: 166, core: false },
+  { name: "West Radial", x1: 345, y1: 166, x2: 346, y2: 201, core: false },
+  { name: "West Radial", x1: 345, y1: 201, x2: 346, y2: 253, core: false },
+  { name: "West Radial", x1: 345, y1: 253, x2: 346, y2: 366, core: false },
+  { name: "West Radial", x1: 345, y1: 366, x2: 346, y2: 464, core: false },
+  { name: "West Radial", x1: 345, y1: 464, x2: 346, y2: 592, core: false },
+  { name: "North Spoke", x1: 420, y1: 60, x2: 421, y2: 166, core: false },
+  { name: "North Spoke", x1: 420, y1: 166, x2: 421, y2: 201, core: false },
+  { name: "North Spoke", x1: 420, y1: 201, x2: 421, y2: 253, core: true },
+  { name: "North Spoke", x1: 420, y1: 253, x2: 421, y2: 270, core: true },
+  { name: "North Spoke", x1: 420, y1: 270, x2: 421, y2: 302, core: true },
+  { name: "North Spoke", x1: 420, y1: 302, x2: 421, y2: 328, core: true },
+  { name: "North Spoke", x1: 420, y1: 328, x2: 421, y2: 366, core: true },
+  { name: "North Spoke", x1: 420, y1: 366, x2: 421, y2: 464, core: true },
+  { name: "North Spoke", x1: 420, y1: 464, x2: 421, y2: 592, core: false },
+  { name: "West Loop", x1: 433, y1: 201, x2: 434, y2: 253, core: true },
+  { name: "West Loop", x1: 433, y1: 253, x2: 434, y2: 270, core: true },
+  { name: "West Loop", x1: 433, y1: 270, x2: 434, y2: 302, core: true },
+  { name: "West Loop", x1: 433, y1: 302, x2: 434, y2: 328, core: true },
+  { name: "West Loop", x1: 433, y1: 328, x2: 434, y2: 366, core: true },
+  { name: "Exchange Rd", x1: 474, y1: 201, x2: 475, y2: 253, core: true },
+  { name: "Exchange Rd", x1: 474, y1: 253, x2: 475, y2: 270, core: true },
+  { name: "Exchange Rd", x1: 474, y1: 270, x2: 475, y2: 302, core: true },
+  { name: "Tollhouse Rd", x1: 448, y1: 60, x2: 449, y2: 166, core: false },
+  { name: "Tollhouse Rd", x1: 448, y1: 166, x2: 449, y2: 201, core: false },
+  { name: "Old Beacon Rd", x1: 560, y1: 60, x2: 561, y2: 166, core: false },
+  { name: "Old Beacon Rd", x1: 560, y1: 166, x2: 561, y2: 201, core: false },
+  { name: "West Ave", x1: 482, y1: 201, x2: 483, y2: 253, core: true },
+  { name: "West Ave", x1: 482, y1: 253, x2: 483, y2: 270, core: true },
+  { name: "West Ave", x1: 482, y1: 270, x2: 483, y2: 302, core: true },
+  { name: "West Ave", x1: 482, y1: 302, x2: 483, y2: 328, core: true },
+  { name: "West Ave", x1: 482, y1: 328, x2: 483, y2: 366, core: true },
+  { name: "West Ave", x1: 482, y1: 366, x2: 483, y2: 411, core: true },
+  { name: "West Ave", x1: 482, y1: 411, x2: 483, y2: 464, core: true },
+  { name: "West Ave", x1: 482, y1: 464, x2: 483, y2: 592, core: false },
+  { name: "East Ave", x1: 546, y1: 201, x2: 547, y2: 253, core: true },
+  { name: "East Ave", x1: 546, y1: 253, x2: 547, y2: 270, core: true },
+  { name: "East Ave", x1: 546, y1: 270, x2: 547, y2: 302, core: true },
+  { name: "East Ave", x1: 546, y1: 302, x2: 547, y2: 328, core: true },
+  { name: "East Ave", x1: 546, y1: 328, x2: 547, y2: 366, core: true },
+  { name: "Chapel Row", x1: 557, y1: 201, x2: 558, y2: 253, core: true },
+  { name: "Chapel Row", x1: 557, y1: 253, x2: 558, y2: 270, core: true },
+  { name: "Chapel Row", x1: 557, y1: 270, x2: 558, y2: 302, core: true },
+  { name: "Chapel Row", x1: 557, y1: 302, x2: 558, y2: 328, core: true },
+  { name: "Station Rd", x1: 570, y1: 201, x2: 571, y2: 253, core: true },
+  { name: "Station Rd", x1: 570, y1: 253, x2: 571, y2: 270, core: true },
+  { name: "Station Rd", x1: 570, y1: 270, x2: 571, y2: 302, core: true },
+  { name: "Station Rd", x1: 570, y1: 302, x2: 571, y2: 328, core: true },
+  { name: "Station Rd", x1: 575, y1: 201, x2: 576, y2: 253, core: true },
+  { name: "Station Rd", x1: 575, y1: 253, x2: 576, y2: 270, core: true },
+  { name: "Station Rd", x1: 575, y1: 270, x2: 576, y2: 302, core: true },
+  { name: "Station Rd", x1: 575, y1: 302, x2: 576, y2: 328, core: true },
+  { name: "Station Rd", x1: 575, y1: 328, x2: 576, y2: 366, core: true },
+  { name: "Station Rd", x1: 575, y1: 366, x2: 576, y2: 411, core: true },
+  { name: "Station Rd", x1: 575, y1: 411, x2: 576, y2: 464, core: true },
+  { name: "Station Rd", x1: 575, y1: 464, x2: 576, y2: 592, core: false },
+  { name: "Observatory Row", x1: 587, y1: 201, x2: 588, y2: 253, core: true },
+  { name: "Observatory Row", x1: 587, y1: 253, x2: 588, y2: 270, core: true },
+  { name: "Observatory Row", x1: 587, y1: 270, x2: 588, y2: 302, core: true },
+  { name: "Mill Row", x1: 592, y1: 302, x2: 593, y2: 328, core: true },
+  { name: "Chapel Row", x1: 615, y1: 201, x2: 616, y2: 253, core: true },
+  { name: "Chapel Row", x1: 615, y1: 253, x2: 616, y2: 270, core: true },
+  { name: "Chapel Row", x1: 615, y1: 270, x2: 616, y2: 302, core: true },
+  { name: "Chapel Row", x1: 615, y1: 302, x2: 616, y2: 328, core: true },
+  { name: "Chapel Row", x1: 620, y1: 60, x2: 621, y2: 166, core: false },
+  { name: "Chapel Row", x1: 620, y1: 166, x2: 621, y2: 201, core: false },
+  { name: "Chapel Row", x1: 620, y1: 201, x2: 621, y2: 253, core: true },
+  { name: "Chapel Row", x1: 620, y1: 253, x2: 621, y2: 270, core: true },
+  { name: "Chapel Row", x1: 620, y1: 270, x2: 621, y2: 302, core: true },
+  { name: "Chapel Row", x1: 620, y1: 302, x2: 621, y2: 328, core: true },
+  { name: "Chapel Row", x1: 620, y1: 328, x2: 621, y2: 366, core: true },
+  { name: "East Orbital Rd", x1: 660, y1: 60, x2: 661, y2: 166, core: false },
+  { name: "East Orbital Rd", x1: 660, y1: 166, x2: 661, y2: 201, core: false },
+  { name: "East Orbital Rd", x1: 660, y1: 201, x2: 661, y2: 253, core: true },
+  { name: "East Orbital Rd", x1: 660, y1: 253, x2: 661, y2: 270, core: true },
+  { name: "East Orbital Rd", x1: 660, y1: 270, x2: 661, y2: 302, core: true },
+  { name: "East Orbital Rd", x1: 660, y1: 302, x2: 661, y2: 328, core: true },
+  { name: "East Orbital Rd", x1: 660, y1: 328, x2: 661, y2: 366, core: true },
+  { name: "East Orbital Rd", x1: 660, y1: 366, x2: 661, y2: 411, core: true },
+  { name: "East Orbital Rd", x1: 660, y1: 411, x2: 661, y2: 440, core: true },
+  { name: "East Orbital Rd", x1: 660, y1: 440, x2: 661, y2: 464, core: true },
+  { name: "Commons Lane", x1: 700, y1: 201, x2: 701, y2: 253, core: false },
+  { name: "Commons Lane", x1: 700, y1: 253, x2: 701, y2: 302, core: false },
+  { name: "Commons Lane", x1: 700, y1: 302, x2: 701, y2: 366, core: false },
+  { name: "Commons Lane", x1: 700, y1: 366, x2: 701, y2: 411, core: false },
+  { name: "Commons Lane", x1: 700, y1: 411, x2: 701, y2: 464, core: false },
+  { name: "Commons Lane", x1: 700, y1: 464, x2: 701, y2: 592, core: false },
+  { name: "College Ave", x1: 726, y1: 60, x2: 727, y2: 166, core: false },
+  { name: "College Ave", x1: 726, y1: 166, x2: 727, y2: 201, core: false },
+  { name: "College Ave", x1: 726, y1: 201, x2: 727, y2: 253, core: false },
+  { name: "College Ave", x1: 726, y1: 253, x2: 727, y2: 302, core: false },
+  { name: "College Ave", x1: 726, y1: 302, x2: 727, y2: 366, core: false },
+  { name: "College Ave", x1: 726, y1: 366, x2: 727, y2: 440, core: false },
+  { name: "College Ave", x1: 726, y1: 440, x2: 727, y2: 464, core: false },
+  { name: "College Ave", x1: 726, y1: 464, x2: 727, y2: 592, core: false },
+  { name: "Greenhouse Row", x1: 720, y1: 201, x2: 721, y2: 253, core: false },
+  { name: "Greenhouse Row", x1: 720, y1: 253, x2: 721, y2: 302, core: false },
+  { name: "Greenhouse Row", x1: 720, y1: 302, x2: 721, y2: 366, core: false },
+  { name: "Greenhouse Row", x1: 720, y1: 366, x2: 721, y2: 411, core: false },
+  { name: "Greenhouse Row", x1: 720, y1: 411, x2: 721, y2: 464, core: false },
+  { name: "Bandstand Rd", x1: 855, y1: 201, x2: 856, y2: 253, core: false },
+  { name: "Bandstand Rd", x1: 855, y1: 253, x2: 856, y2: 366, core: false },
+  { name: "Bandstand Rd", x1: 855, y1: 366, x2: 856, y2: 464, core: false },
+  { name: "Bandstand Rd", x1: 855, y1: 464, x2: 856, y2: 592, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 60, x2: 773, y2: 166, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 166, x2: 773, y2: 201, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 201, x2: 773, y2: 253, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 253, x2: 773, y2: 302, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 302, x2: 773, y2: 366, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 366, x2: 773, y2: 411, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 411, x2: 773, y2: 440, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 440, x2: 773, y2: 464, core: false },
+  { name: "Hollowmere Lane", x1: 772, y1: 464, x2: 773, y2: 592, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 166, x2: 843, y2: 201, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 201, x2: 843, y2: 253, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 253, x2: 843, y2: 302, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 302, x2: 843, y2: 366, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 366, x2: 843, y2: 411, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 411, x2: 843, y2: 440, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 440, x2: 843, y2: 464, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 464, x2: 843, y2: 550, core: false },
+  { name: "Bonehouse Lane", x1: 842, y1: 550, x2: 843, y2: 592, core: false },
+  { name: "College Ave E", x1: 900, y1: 60, x2: 901, y2: 166, core: false },
+  { name: "College Ave E", x1: 900, y1: 166, x2: 901, y2: 201, core: false },
+  { name: "College Ave E", x1: 900, y1: 201, x2: 901, y2: 253, core: false },
+  { name: "College Ave E", x1: 900, y1: 253, x2: 901, y2: 366, core: false },
+  { name: "College Ave E", x1: 900, y1: 366, x2: 901, y2: 411, core: false },
+  { name: "College Ave E", x1: 900, y1: 411, x2: 901, y2: 440, core: false },
+  { name: "College Ave E", x1: 900, y1: 440, x2: 901, y2: 464, core: false },
+  { name: "College Ave E", x1: 900, y1: 464, x2: 901, y2: 592, core: false },
+  { name: "Fen Lane", x1: 975, y1: 60, x2: 976, y2: 166, core: false },
+  { name: "Fen Lane", x1: 975, y1: 166, x2: 976, y2: 201, core: false },
+  { name: "Fen Lane", x1: 975, y1: 201, x2: 976, y2: 253, core: false },
+  { name: "Fen Lane", x1: 975, y1: 253, x2: 976, y2: 366, core: false },
+  { name: "Fen Lane", x1: 975, y1: 366, x2: 976, y2: 440, core: false },
+  { name: "Fen Lane", x1: 975, y1: 440, x2: 976, y2: 464, core: false },
+  { name: "Fen Lane", x1: 975, y1: 464, x2: 976, y2: 592, core: false },
+  { name: "East Ring", x1: 1019, y1: 60, x2: 1020, y2: 166, core: false },
+  { name: "East Ring", x1: 1019, y1: 166, x2: 1020, y2: 201, core: false },
+  { name: "East Ring", x1: 1019, y1: 201, x2: 1020, y2: 253, core: false },
+  { name: "East Ring", x1: 1019, y1: 253, x2: 1020, y2: 366, core: false },
+  { name: "East Ring", x1: 1019, y1: 366, x2: 1020, y2: 440, core: false },
+  { name: "East Ring", x1: 1019, y1: 440, x2: 1020, y2: 464, core: false },
+  { name: "East Ring", x1: 1019, y1: 464, x2: 1020, y2: 592, core: false },
+];;
+
+/** One named forest zone, in tile coordinates. `x`/`y` is the top-left tile. */
+export interface ForestZone {
+  readonly name: string;
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+/** The forest zones, in emission order. */
+export const FOREST_ZONES: readonly ForestZone[] = [
+  { name: "Riverside Green", x: 32, y: 168, w: 28, h: 157 },
+  { name: "Millrace Green", x: 347, y: 168, w: 73, h: 33 },
+  { name: "Kiln Green", x: 208, y: 203, w: 60, h: 50 },
+  { name: "Central Park", x: 484, y: 203, w: 61, h: 50 },
+  { name: "Commons Park", x: 702, y: 304, w: 17, h: 62 },
+  { name: "South Common", x: 577, y: 466, w: 62, h: 83 },
+  { name: "Fen Green", x: 902, y: 255, w: 73, h: 73 },
+  { name: "Elm Fields", x: 977, y: 255, w: 42, h: 110 },
+  { name: "Farm Green", x: 422, y: 368, w: 59, h: 43 },
+  { name: "Hollowmoor Cemetery", x: 774, y: 368, w: 68, h: 43 },
+  { name: "Moor Pasture", x: 90, y: 466, w: 54, h: 83 },
+  { name: "Ashen Common", x: 147, y: 466, w: 58, h: 44 },
+];;
+
+/** A building footprint, which is all the parcel table needs from a location. */
+export interface Footprint { x: number; y: number; w: number; h: number }
+
+/** One named district parcel, in tile coordinates. `x`/`y` is the top-left tile. */
+export interface DistrictParcel extends Footprint { readonly name: string }
+
+/**
+ * The district parcels.
+ *
+ * These were literals in frontend/src/canvas/scenery.ts, which is the only module
+ * that draws them — but the generator and shared/test/road-network.test.ts also
+ * need them, to prove each district still has two independent routes to the core.
+ * One table, in the same file as the network it describes.
+ *
+ * The town proper is a parcel too, not an exception. Treating it as one means
+ * "every building sits inside a parcel" is a single uniform rule. Its bounds are
+ * the original 42 buildings (435..615, 277..363) plus a little ground.
+ */
+export const DISTRICT_PARCELS: readonly DistrictParcel[] = [
+  { name: "SlopAgentbook", x: 430, y: 272, w: 190, h: 96 },
+  { name: "Northgate", x: 422, y: 150, w: 192, h: 50 },
+  { name: "Ironworks", x: 150, y: 126, w: 178, h: 48 },
+  { name: "Riverside Wharf", x: 180, y: 390, w: 166, h: 64 },
+  { name: "The Commons", x: 700, y: 278, w: 194, h: 48 },
+  { name: "University Quarter", x: 720, y: 126, w: 184, h: 46 },
+  { name: "Farm Belt", x: 430, y: 428, w: 168, h: 44 },
+  { name: "Hollowmere", x: 700, y: 480, w: 116, h: 56 },
+  { name: "Ashen Moor", x: 160, y: 542, w: 86, h: 34 },
+];

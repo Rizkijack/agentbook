@@ -1,4 +1,4 @@
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot } from "@slopagentbook/shared";
 import { existsSync, mkdirSync, appendFileSync, readFileSync } from "fs";
 import path from "path";
 
@@ -82,7 +82,7 @@ export const mem0: MemoryProvider | null = process.env.MEM0_API_KEY
               Authorization: `Token ${process.env.MEM0_API_KEY}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ user_id: agentId, text, metadata: { source: "hermesbook" } }),
+            body: JSON.stringify({ user_id: agentId, text, metadata: { source: "slopagentbook" } }),
           });
         } catch {}
         // also mirror to honcho

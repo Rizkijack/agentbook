@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Hc, rf, encodeGenes } from "@hermesbook/shared";
+import { Hc, rf, encodeGenes } from "@slopagentbook/shared";
 
 describe("backend genetics via shared", () => {
   it("rf deterministic", () => {

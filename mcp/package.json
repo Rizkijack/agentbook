@@ -1,5 +1,5 @@
 {
-  "name": "@hermesbook/mcp",
+  "name": "@slopagentbook/mcp",
   "version": "0.1.0",
   "type": "module",
   "exports": {
@@ -12,7 +12,7 @@
     "start:stdio": "node dist/stdio.js"
   },
   "dependencies": {
-    "@hermesbook/shared": "workspace:*",
+    "@slopagentbook/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.30.1",
     "zod": "^3.23.8"
   },

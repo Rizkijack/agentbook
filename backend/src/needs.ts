@@ -1,4 +1,4 @@
-import type { Resident } from "@hermesbook/shared";
+import type { Resident } from "@slopagentbook/shared";
 
 export function tickNeeds(needs: Resident["needs"], act: string, dtSec: number): Resident["needs"] {
   const next = { ...needs };
@@ -54,4 +54,4 @@ export function isNight(clock: number): boolean {
   return clock > 0.72;
 }
 
-export { dayClock } from "@hermesbook/shared";
+export { dayClock } from "@slopagentbook/shared";

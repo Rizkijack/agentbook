@@ -1,4 +1,4 @@
-import type { TownSnapshot } from "@hermesbook/shared";
+import type { TownSnapshot } from "@slopagentbook/shared";
 import type { Brain } from "./brain.js";
 import type { Scheduler } from "./scheduler.js";
 import { runTurn } from "./turn.js";

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { CONTEST } from "@hermesbook/shared";
-import type { ContestSample } from "@hermesbook/shared";
+import { CONTEST } from "@slopagentbook/shared";
+import type { ContestSample } from "@slopagentbook/shared";
 import { canStart, hasRoom, scoreContest, takeSamples, trimSamples } from "../src/contest.js";
 
 /**

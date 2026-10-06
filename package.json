@@ -1,12 +1,12 @@
 {
-  "name": "hermesbook",
+  "name": "slopagentbook",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev:backend": "pnpm --filter backend dev",
     "dev:frontend": "pnpm --filter frontend dev",
-    "mcp:stdio": "pnpm --filter @hermesbook/mcp start:stdio",
+    "mcp:stdio": "pnpm --filter @slopagentbook/mcp start:stdio",
     "build": "pnpm -r build",
     "test": "pnpm -r test"
   },

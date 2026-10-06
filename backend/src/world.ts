@@ -1,12 +1,12 @@
-import type { TownSnapshot, Resident, Post, TownEvent, Edition, Project, Faction, Quest, Contest } from "@hermesbook/shared";
-import { defaultConfig } from "@hermesbook/shared";
-import { Hc } from "@hermesbook/shared";
-import { seededRandom } from "@hermesbook/shared";
+import type { TownSnapshot, Resident, Post, TownEvent, Edition, Project, Faction, Quest, Contest } from "@slopagentbook/shared";
+import { defaultConfig } from "@slopagentbook/shared";
+import { Hc } from "@slopagentbook/shared";
+import { seededRandom } from "@slopagentbook/shared";
 import { LOCATIONS } from "./locations.js";
 import { createInitialQuests } from "./quests.js";
 import { createSeason } from "./season.js";
 
-const JOBS = ["shearer", "miller", "librarian", "clerk", "baker", "herder", "scribe", "smith"] as const;
+const JOBS = ["shearer", "miller", "librarian", "clerk", "baker", "herder", "scribe", "smith", "courier", "keeper"] as const;
 const OBSESSIONS = [
   "the grain ledger discrepancy",
   "the lost cart schedule",

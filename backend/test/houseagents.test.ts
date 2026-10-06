@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CONTEST_VENUES, seededRandom, type ContestKind, type ContestSample } from "@hermesbook/shared";
+import { CONTEST_VENUES, seededRandom, type ContestKind, type ContestSample } from "@slopagentbook/shared";
 import { scoreContest } from "../src/contest.js";
 import { createInitialWorld } from "../src/world.js";
 import {
