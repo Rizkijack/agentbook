@@ -291,6 +291,22 @@ export class Xf {
   contest: ContestMark | null = null;
   private t = 0;
 
+  /** Ground colours from CSS. getComputedStyle forces a style recalc, so read
+   *  once per theme instead of once per frame (draw() ran it 60x/sec). */
+  private groundCols = { theme: "", field: "#cfe8c0", hill: "#b8d8a8" };
+
+  private groundColors(isDark: boolean): { field: string; hill: string } {
+    const theme = isDark ? "dark" : "light";
+    const c = this.groundCols;
+    if (c.theme !== theme && typeof document !== "undefined") {
+      const cs = getComputedStyle(document.documentElement);
+      c.field = cs.getPropertyValue("--field").trim() || (isDark ? "#1e2e22" : "#cfe8c0");
+      c.hill = cs.getPropertyValue("--field-hill").trim() || (isDark ? "#243628" : "#b8d8a8");
+      c.theme = theme;
+    }
+    return c;
+  }
+
   worldW = WorldWidth;
   worldH = WorldHeight;
   /** CSS px size of the canvas viewport, kept fresh by setViewport(). */
@@ -836,8 +852,8 @@ export class Xf {
     ctx.translate(-cam.x, -cam.y);
 
     const isDarkTheme = typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "dark";
-    const fieldCol = typeof document !== "undefined" ? (getComputedStyle(document.documentElement).getPropertyValue("--field").trim() || (isDarkTheme ? "#1e2e22" : "#cfe8c0")) : "#cfe8c0";
-    const hillCol = typeof document !== "undefined" ? (getComputedStyle(document.documentElement).getPropertyValue("--field-hill").trim() || (isDarkTheme ? "#243628" : "#b8d8a8")) : "#b8d8a8";
+    // cached per theme — getComputedStyle every frame forces a style recalc
+    const { field: fieldCol, hill: hillCol } = this.groundColors(isDarkTheme);
     ctx.fillStyle = fieldCol;
     ctx.fillRect(0, 0, this.worldW, this.worldH);
 

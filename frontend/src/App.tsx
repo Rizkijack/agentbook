@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import "./styles/global.css";
 import { useHashRoute, Link } from "./router/hash.js";
 import { Pe, vt } from "@slopagentbook/shared";
@@ -8,17 +8,19 @@ import { useSession } from "./store/useSession.js";
 import { ThinkingPanel } from "./components/ThinkingPanel.js";
 import { ChatPanel } from "./components/ChatPanel.js";
 import { TownView } from "./views/TownView.js";
-import { HerdView } from "./views/HerdView.js";
-import { FeedView } from "./views/FeedView.js";
-import { PaperView } from "./views/PaperView.js";
-import { ForkView } from "./views/ForkView.js";
-import { LineageView } from "./views/LineageView.js";
-import { CoinView } from "./views/CoinView.js";
-import { DocsView } from "./views/DocsView.js";
-import { LlamaView } from "./views/LlamaView.js";
-import { QuestView } from "./views/QuestView.js";
-import { ContestView } from "./views/ContestView.js";
-import { RegisterView } from "./views/RegisterView.js";
+// Route-level code splitting: the landing view stays in the main chunk, every
+// other view loads on demand so first paint doesn't parse the whole app.
+const HerdView = lazy(() => import("./views/HerdView.js").then((m) => ({ default: m.HerdView })));
+const FeedView = lazy(() => import("./views/FeedView.js").then((m) => ({ default: m.FeedView })));
+const PaperView = lazy(() => import("./views/PaperView.js").then((m) => ({ default: m.PaperView })));
+const ForkView = lazy(() => import("./views/ForkView.js").then((m) => ({ default: m.ForkView })));
+const LineageView = lazy(() => import("./views/LineageView.js").then((m) => ({ default: m.LineageView })));
+const CoinView = lazy(() => import("./views/CoinView.js").then((m) => ({ default: m.CoinView })));
+const DocsView = lazy(() => import("./views/DocsView.js").then((m) => ({ default: m.DocsView })));
+const LlamaView = lazy(() => import("./views/LlamaView.js").then((m) => ({ default: m.LlamaView })));
+const QuestView = lazy(() => import("./views/QuestView.js").then((m) => ({ default: m.QuestView })));
+const ContestView = lazy(() => import("./views/ContestView.js").then((m) => ({ default: m.ContestView })));
+const RegisterView = lazy(() => import("./views/RegisterView.js").then((m) => ({ default: m.RegisterView })));
 
 export default function App() {
   const [route] = useHashRoute();
@@ -124,6 +126,7 @@ export default function App() {
         className={"page" + (isTurning ? " turning" : "")}
         style={{ flex: 1, minWidth: 0, margin: 0, maxWidth: "none", paddingLeft: 0, paddingRight: 0 }}
       >
+        <Suspense fallback={<div className="card mono muted" style={{ padding: 24, textAlign: "center" }}>Loading view…</div>}>
         {page === "town" && <TownView snapshot={state} onFollowChange={setFollowPick} />}
         {page === "herd" && <HerdView snapshot={state} />}
         {page === "feed" && <FeedView snapshot={state} />}
@@ -140,6 +143,7 @@ export default function App() {
         {!["town", "herd", "feed", "paper", "quest", "fork", "register", "lineage", "coin", "docs", "llama", "contest"].includes(page) && (
           <div className="card">Unknown page "{page}". <Link to="town">Go to town</Link></div>
         )}
+        </Suspense>
       </main>
 
       <aside

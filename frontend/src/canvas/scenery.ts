@@ -3134,6 +3134,27 @@ export interface District { name: string; x: number; y: number; w: number; h: nu
 
 export const DISTRICTS: District[] = DISTRICT_PARCELS.map((d) => ({ ...d }));
 
+// Grass-tuft positions, baked once at module load.
+//
+// drawTerrainDecor used to re-derive these every frame: ~18.5k grid cells, each
+// paying for a hash, a road check, a building check and a PAVED lookup, then 6
+// canvas ops per visible tuft (~47k ops at full zoom-out). The positions are
+// fully deterministic — only the visibility cull depends on the camera — so
+// bake them into a flat array here and keep just the cull per frame.
+const TUFTS: Float32Array = (() => {
+  const pts: number[] = [];
+  for (let gx = 2; gx < Pe - 2; gx += 6) {
+    for (let gy = 2; gy < vt - 2; gy += 6) {
+      const r = h2(gx * 5 + 2, gy * 3 + 8);
+      if (r > 0.5) continue;
+      if (onRoad(gx, gy, 1) || onBuilding(gx, gy, 0)) continue;
+      if (PAVED[gy * Pe + gx]) continue;
+      pts.push(gx * V + r * 40, gy * V + (1 - r) * 40);
+    }
+  }
+  return new Float32Array(pts);
+})();
+
 export function drawTerrainDecor(ctx: CanvasRenderingContext2D, view: View, d: SceneDraw): void {
   const { isDark } = d;
 
@@ -3286,30 +3307,23 @@ export function drawTerrainDecor(ctx: CanvasRenderingContext2D, view: View, d: S
     ctx.setLineDash([]);
   }
 
-  // grass tufts
+  // grass tufts — one batched stroke for the whole field. Positions are baked
+  // in TUFTS above; only the visibility cull runs per frame. (Was: 6 canvas
+  // ops per tuft, ~47k ops at full zoom-out.)
+  // Grass belongs to the field and the parks, not to a paved lot — that rule
+  // is already baked into TUFTS.
   ctx.strokeStyle = isDark ? "rgba(120,160,110,0.28)" : "rgba(70,120,60,0.35)";
   ctx.lineWidth = 1;
-  for (let gx = 2; gx < Pe - 2; gx += 6) {
-    for (let gy = 2; gy < vt - 2; gy += 6) {
-      const r = h2(gx * 5 + 2, gy * 3 + 8);
-      if (r > 0.5) continue;
-      const x = gx * V + r * 40, y = gy * V + (1 - r) * 40;
-      if (!visible(x, y, 2, 2, view, 0)) continue;
-      if (onRoad(gx, gy, 1) || onBuilding(gx, gy, 0)) continue;
-      // Grass belongs to the field and the parks. It does not belong on a paved
-      // lot — the city ground is not lawn, and a tuft of grass drawn on it puts
-      // the lawn straight back. (These tufts also never rendered at all until
-      // h2 was fixed: `r > 0.5` could not fire against a hash that only returned
-      // [0, 0.5), so the whole loop was dead code.)
-      if (PAVED[gy * Pe + gx]) continue;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + 2, y - 4);
-      ctx.moveTo(x, y);
-      ctx.lineTo(x - 2, y - 3);
-      ctx.stroke();
-    }
+  ctx.beginPath();
+  for (let i = 0; i < TUFTS.length; i += 2) {
+    const x = TUFTS[i]!, y = TUFTS[i + 1]!;
+    if (!visible(x, y, 2, 2, view, 0)) continue;
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 2, y - 4);
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - 2, y - 3);
   }
+  ctx.stroke();
 }
 
 // --- sortable drawables (trees, props, vehicles) ---------------------------

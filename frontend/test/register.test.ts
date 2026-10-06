@@ -339,7 +339,8 @@ describe("App wires the #/register route", () => {
   const appSource = readFileSync(resolve(process.cwd(), "src/App.tsx"), "utf8");
 
   it("imports RegisterView and renders it on the register page", () => {
-    expect(appSource).toMatch(/import\s+\{\s*RegisterView\s+\}\s+from\s+"\.\/views\/RegisterView\.js";/);
+    // route-level code splitting: views load lazily, so assert the lazy wiring
+    expect(appSource).toMatch(/lazy\(\(\) => import\("\.\/views\/RegisterView\.js"\)/);
     expect(appSource).toMatch(/\{page === "register" && <RegisterView \/>\}/);
   });
 

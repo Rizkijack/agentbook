@@ -9,6 +9,8 @@ export default defineConfig({
     },
   },
   build: {
-    sourcemap: true,
+    // no sourcemaps in production: the 1.3MB .map was shipped in dist and
+    // served to everyone for zero runtime benefit
+    sourcemap: false,
   },
 });
