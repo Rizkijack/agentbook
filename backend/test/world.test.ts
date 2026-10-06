@@ -59,7 +59,7 @@ describe("World", () => {
     // no two default-seeded residents share a name
     const unique = new Set(w58.herd.map((r) => r.name.toLowerCase())).size;
     expect(unique).toBe(58);
-    expect(w.config.maxHerd).toBe(64);
+    expect(w.config.maxHerd).toBe(200);
     expect(w.config.name).toBe("SlopAgentbook");
     expect(w.feed.length).toBeGreaterThan(0);
     expect(w.editions.length).toBe(1);

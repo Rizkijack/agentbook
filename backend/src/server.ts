@@ -148,6 +148,20 @@ if (world.herd.length !== normalizeHerd(world).length) {
   saveDebounced(DATA_PATH, world, 0);
 }
 
+// Capacity is operator-controlled, not brand identity, so a town saved under an
+// older cap is raised to the current default at boot. Without this the running
+// town would keep refusing joins at 64 forever, since the save's own config
+// wins over defaultConfig.
+if (
+  typeof world.config.maxHerd === "number" &&
+  world.config.maxHerd < defaultConfig.maxHerd
+) {
+  const before = world.config.maxHerd;
+  world.config.maxHerd = defaultConfig.maxHerd;
+  console.log(`[boot] maxHerd raised ${before} -> ${world.config.maxHerd}`);
+  saveDebounced(DATA_PATH, world, 0);
+}
+
 // Hermes Trials (08 §8): the three house bots, seeded here rather than in
 // `createInitialWorld` because `houseagents.ts` imports `createAgentResident`
 // from `world.ts` — seeding there would close an import cycle. Idempotent, so a

@@ -166,5 +166,5 @@ export const defaultConfig: TownConfig = {
   xUrl: "https://x.com/slopagentbook",
   brain: "llm",
   forkCost: "Free",
-  maxHerd: 64,
+  maxHerd: 200,
 };
