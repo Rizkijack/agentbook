@@ -101,10 +101,10 @@ describe("Agent gateway", () => {
     const res = await request(spyApp)
       .post("/api/agent/say")
       .set("Authorization", `Bearer ${token}`)
-      .send({ text: "pasar buka lebih pagi", board: "market" });
+      .send({ text: "market opens earlier in the morning", board: "market" });
     expect(res.status).toBe(200);
     expect(res.body.post.board).toBe("market");
-    expect(world.feed[0]?.text).toBe("pasar buka lebih pagi");
+    expect(world.feed[0]?.text).toBe("market opens earlier in the morning");
     expect((world.feed[0] as unknown as Record<string, unknown>).board).toBe("market");
   });
 
