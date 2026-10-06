@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { LOCATIONS } from "../src/canvas/locationsData.js";
 import { WorldWidth, WorldHeight, Pe, vt, V } from "../src/canvas/constants.js";
 import {
-  ROADS, TREES, PROPS, LIGHTS, VEHICLES, FORESTS, DISTRICTS, type District,
+  ROADS, TREES, PROPS, LIGHTS, VEHICLES, VEHICLE_COUNT, FORESTS, DISTRICTS, type District,
   tickScenery, lightState, drawTerrainDecor, pushScenery, type QueueItem,
 } from "../src/canvas/scenery.js";
 
@@ -249,9 +249,11 @@ describe("scenery", () => {
   });
 
   it("vehicles stay in the world and keep moving", () => {
-    // one unit per road per direction — the fleet follows the network, so this
-    // is a range rather than a fixed 16
-    expect(VEHICLES.length).toBe(ROADS.length * 2);
+    // A fixed fleet, sized for the frame budget rather than for the road count.
+    // This used to be one unit per road per direction — 738, which was never
+    // measured until it cost 851 us/frame.
+    expect(VEHICLES.length).toBe(VEHICLE_COUNT);
+    expect(VEHICLE_COUNT).toBe(150);
     const kinds = new Set(VEHICLES.map((v) => (v as unknown as { kind: string }).kind));
     for (const k of ["car", "bus", "truck", "taxi", "van", "pickup"] as const) {
       expect(kinds.has(k), `inventory missing ${k}`).toBe(true);

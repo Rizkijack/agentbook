@@ -40,29 +40,6 @@ const CORE = ROADS.filter((r) => r[5]);
 const isH = (r) => (r[3] - r[1]) >= (r[4] - r[2]);
 const roadLen = (r) => Math.max(r[3] - r[1], r[4] - r[2]);
 
-// --- vehicle routes: one loop per road, per lane ---------------------------
-// Lanes sit at y1+0.7 and y2+0.3 (and the x equivalents) — inside the 2-tile
-// carriageway, which is what scenery.test.ts's lane check measures against.
-const ROUTES = [];
-for (const r of ROADS) {
-  const [name, x1, y1, x2, y2] = r;
-  // No overhang past the road ends: scenery.test.ts insets each road by 5px, so
-  // a loop that runs past the last tile puts a vehicle on grass.
-  const pad = 0;
-  // Lanes sit either side of the carriageway centreline (centre = x1+1 / y1+1
-  // for a 2-tile road), offset by 0.3. They have to clear the 5px inset that
-  // scenery.test.ts's lane check applies at each road edge — centring them on
-  // the tile boundary instead put the west ring's lane 0.2px outside the tarmac.
-  const near = 0.7, far = 1.3;
-  const loop = isH(r)
-    ? [[x1 - pad, y1 + far], [x2 + pad, y1 + far], [x2 + pad, y1 + near], [x1 - pad, y1 + near]]
-    : [[x1 + near, y1 - pad], [x1 + near, y2 + pad], [x1 + far, y2 + pad], [x1 + far, y1 - pad]];
-  const back = isH(r)
-    ? [[x1 - pad, y1 + near], [x2 + pad, y1 + near], [x2 + pad, y1 + far], [x1 - pad, y1 + far]]
-    : [[x1 + far, y1 - pad], [x1 + far, y2 + pad], [x1 + near, y2 + pad], [x1 + near, y1 - pad]];
-  ROUTES.push({ name, route: loop });
-  ROUTES.push({ name, route: back });
-}
 
 // --- street lamps: only the roads short enough to light ---------------------
 const LAMPS = [];
@@ -128,15 +105,6 @@ const lampBlock = ['const LAMPS: Array<[number, number, "n" | "s" | "w" | "e"]> 
 for (const [a, b, side] of LAMPS) lampBlock.push(`  [${a}, ${b}, ${JSON.stringify(side)}],`);
 lampBlock.push("];");
 out.push(["lamps", lampBlock.join("\n")]);
-
-const routeBlock = ["const ROUTES: Array<{ name: string; route: number[][] }> = ["];
-for (const { name, route } of ROUTES) {
-  const pts = route.map((p) => `[${p[0]}, ${p[1]}]`).join(", ");
-  routeBlock.push(`  { name: ${JSON.stringify(name)}, route: [${pts}] },`);
-}
-routeBlock.push("];");
-out.push(["routes", routeBlock.join("\n")]);
-
 // --- gate: the network must be a network -------------------------------------
 // Everything below this line writes files, so the checks run first. checkNetwork
 // returns every failure it finds rather than throwing on the first one: fixing a
@@ -175,7 +143,6 @@ const TARGETS = {
   "access-spurs": "shared/src/map.ts",
   forests: "frontend/src/canvas/scenery.ts",
   lamps: "frontend/src/canvas/scenery.ts",
-  routes: "frontend/src/canvas/scenery.ts",
 };
 
 const files = new Map();
@@ -229,7 +196,6 @@ const bridges = DISTRICT_PARCELS.map((d) => {
 });
 console.log(`frontage ${LOCATIONS.length - noFrontage.length - nested.length}/${LOCATIONS.length - nested.length} buildings have a road beside them (${nested.length} nested inside another footprint)`);
 console.log(`districts ${bridges.map(([n, k]) => `${n}:${k}`).join("  ")}`);
-console.log(`routes   ${ROUTES.length} lanes -> ${ROUTES.length} vehicles`);
 console.log(`lamps    ${LAMPS.length}`);
 console.log(`lights   ${lights.length} core intersections (of ${(() => {
   const h = ROADS.filter((r) => r[4] - r[2] < r[3] - r[1]);
