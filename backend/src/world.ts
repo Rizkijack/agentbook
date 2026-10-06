@@ -60,10 +60,19 @@ function makeResident(overrides: Partial<Resident> & { name: string }, rng: () =
   };
 }
 
-export function createInitialWorld(): TownSnapshot {
+export function createInitialWorld(herdTarget = 8): TownSnapshot {
   const rng = seededRandom(20260921);
-  const names = ["Vetch", "Hux", "Marrow", "Sedge", "Cobb", "Tallow", "Brindle", "Wick", "Fenn", "Pip", "Quill", "Harrow"];
-  const herd: Resident[] = names.slice(0, 8).map((n) => makeResident({ name: n }, rng));
+  const names = [
+    "Vetch", "Hux", "Marrow", "Sedge", "Cobb", "Tallow", "Brindle", "Wick", "Fenn", "Pip", "Quill", "Harrow",
+    "Briar", "Tinder", "Lark", "Wren", "Sorrel", "Ash", "Hag", "Bole", "Marsh", "Cinder",
+    "Quills", "Stubble", "Nettle", "Gorse", "Buckwheat", "Ather", "Umber", "Roan", "Shag", "Flax",
+    "Sedgemoor", "Tansy", "Plumb", "Rusk", "Dace", "Bracken", "Cull", "Timbre", "Vest", "Hazel", "Rowan",
+    "Larch", "Birch", "Alder", "Heather", "Downy", "Rosin", "Flint",
+    "Burr", "Tress", "Hale", "Crowle", "Linden", "Stilb", "Tamsin", "Osier",
+  ];
+  const herd: Resident[] = names
+    .slice(0, Math.min(Math.max(herdTarget, 0), names.length))
+    .map((n) => makeResident({ name: n }, rng));
 
   // relationships: random affinities
   for (const a of herd) {

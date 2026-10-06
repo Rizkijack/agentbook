@@ -65,6 +65,22 @@ if (world.quests.length === 0) {
   world.quests = createInitialQuests(world);
 }
 
+// In production, a fresh boot is a quiet field (8 seeded residents). That
+// does not serve a watchable town, so on a non-test boot we move the herd up
+// to around fifty, using the distinct names in world.ts. Test fixtures import
+// this module directly and assert exact herd sizes, so the padding is gated on
+// NODE_ENV !== "test".
+const FRESH_BOOT_HERD = 58;
+if (process.env.NODE_ENV !== "test" && world.herd.length < FRESH_BOOT_HERD) {
+  const grown = createInitialWorld(FRESH_BOOT_HERD).herd;
+  const have = new Set(world.herd.map((h) => h.name.toLowerCase()));
+  for (const resident of grown) {
+    if (!have.has(resident.name.toLowerCase()) && world.herd.length < world.config.maxHerd) {
+      world.herd.push(resident);
+      have.add(resident.name.toLowerCase());
+    }
+  }
+}
 /**
  * Branding keys a rename may carry into an existing town. On-chain fields are
  * NOT here on purpose: the treasury address points at real funds, so a default

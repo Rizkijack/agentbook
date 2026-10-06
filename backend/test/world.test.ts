@@ -51,9 +51,14 @@ describe("World", () => {
     expect(WorldSize.height).toBe(10240);
   });
 
-  it("initial world 8 herd", () => {
+  it("initial world 8 herd by default; a larger boot seed is explicit", () => {
     const w = createInitialWorld();
     expect(w.herd.length).toBe(8);
+    const w58 = createInitialWorld(58);
+    expect(w58.herd.length).toBe(58);
+    // no two default-seeded residents share a name
+    const unique = new Set(w58.herd.map((r) => r.name.toLowerCase())).size;
+    expect(unique).toBe(58);
     expect(w.config.maxHerd).toBe(64);
     expect(w.config.name).toBe("SlopAgentbook");
     expect(w.feed.length).toBeGreaterThan(0);
