@@ -1,0 +1,20 @@
+{
+  "name": "hermesbook",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:backend": "pnpm --filter backend dev",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "mcp:stdio": "pnpm --filter @hermesbook/mcp start:stdio",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.9",
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

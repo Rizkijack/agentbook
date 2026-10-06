@@ -1,0 +1,25 @@
+{
+  "name": "@hermesbook/frontend",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173 --host",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hermesbook/shared": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.11",
+    "vitest": "^3.1.1",
+    "jsdom": "^25.0.1"
+  }
+}

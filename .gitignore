@@ -1,0 +1,13 @@
+node_modules
+dist
+.hermes/plans/*.md
+.opencode
+.env
+data/town.json
+data/town.backup.json
+data/town.tmp.*
+frontend/dist
+backend/dist
+shared/dist
+.DS_Store
+.vercel
