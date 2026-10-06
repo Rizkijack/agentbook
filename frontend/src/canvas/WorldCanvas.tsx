@@ -227,6 +227,10 @@ export function WorldCanvas({
 
     let raf = 0;
     let last = performance.now();
+    // ?fps=1 badge state — declared here so the frame loop can update it
+    const showFps = new URLSearchParams(window.location.search).get("fps") === "1";
+    let fpsFrames = 0, fpsAcc = 0, fpsWorst = 0, fpsWinStart = last, fpsPrev = last;
+    let fpsShown = { fps: 0, ms: 0, worst: 0 };
 
     // --- sizing (DPR-aware, also reacts to layout changes, not just window resize)
     function applySize() {
@@ -394,6 +398,26 @@ export function WorldCanvas({
       // keep the DPR transform here: draw() only offsets the camera on top of it
       ctx.setTransform(xf.dpr, 0, 0, xf.dpr, 0, 0);
       xf.draw(ctx, xf.viewW, xf.viewH);
+      // ?fps=1 — live frame-rate badge for perf diagnosis (drag the map and
+      // read the numbers: fps = refresh rate, ms = avg frame cost, worst =
+      // slowest frame in the last second — spikes mean hitches)
+      if (showFps) {
+        fpsFrames++;
+        fpsWorst = Math.max(fpsWorst, now - fpsPrev);
+        if (now - fpsPrev > 0) fpsAcc += now - fpsPrev;
+        fpsPrev = now;
+        if (now - fpsWinStart >= 1000) {
+          fpsShown = { fps: fpsFrames, ms: fpsAcc / Math.max(1, fpsFrames), worst: fpsWorst };
+          fpsFrames = 0; fpsAcc = 0; fpsWorst = 0; fpsWinStart = now;
+        }
+        const s = fpsShown;
+        ctx.setTransform(xf.dpr, 0, 0, xf.dpr, 0, 0);
+        ctx.fillStyle = "rgba(10,10,12,0.72)";
+        ctx.fillRect(8, 8, 172, 20);
+        ctx.fillStyle = s.fps >= 50 ? "#7fd67f" : s.fps >= 30 ? "#e0b34c" : "#e06c6c";
+        ctx.font = "11px monospace";
+        ctx.fillText(`${s.fps} fps · ${s.ms.toFixed(1)}ms · worst ${s.worst.toFixed(0)}ms`, 14, 22);
+      }
       raf = requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
