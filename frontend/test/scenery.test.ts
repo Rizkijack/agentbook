@@ -4,7 +4,7 @@ import { WorldWidth, WorldHeight, Pe, vt, V } from "../src/canvas/constants.js";
 import { MIN_ZOOM } from "../src/canvas/engine.js";
 import {
   ROADS, TREES, PROPS, LIGHTS, VEHICLES, VEHICLE_COUNT, FORESTS, DISTRICTS, type District,
-  tickScenery, lightState, drawTerrainDecor, pushScenery, type QueueItem,
+  tickScenery, lightState, drawTerrainDecor, pushScenery, drawQueue, runItem, type QueueItem,
   TUFTS_MIN_ZOOM, TUFTS_MIN_PX, TREE_DETAIL_MIN_ZOOM,
 } from "../src/canvas/scenery.js";
 
@@ -331,8 +331,9 @@ describe("scenery", () => {
     const shapes = (zoom: number): number => {
       const [ctx, calls] = mockCtx();
       const queue: QueueItem[] = [];
-      pushScenery(queue, ctx, { ...scope, zoom }, { isDark: false, night: 0, time: 0 });
-      for (const q of queue) q.draw();
+      const d = { isDark: false, night: 0, time: 0 };
+      pushScenery(queue, ctx, { ...scope, zoom }, d);
+      drawQueue(queue, ctx, d, zoom >= TREE_DETAIL_MIN_ZOOM, zoom);
       let shapes = 0;
       for (const [key, n] of Object.entries(calls)) {
         if (key === "beginPath" || key === "ellipse" || key === "arc" || key === "fill") shapes += n;
@@ -359,7 +360,7 @@ describe("scenery", () => {
     const lightItems = queue.filter((q) => Math.abs(q.y - target.y) < 0.01);
     expect(lightItems.length, "traffic light not pushed to queue").toBeGreaterThanOrEqual(1);
     const before = { ...(calls as Record<string, number>) };
-    for (const item of lightItems) item.draw();
+    for (const item of lightItems) runItem(ctx, item, { isDark: false, night: 0, time: 0 }, true);
     const arcs = (calls["arc"] ?? 0) - (before["arc"] ?? 0);
     const rects = (calls["fillRect"] ?? 0) - (before["fillRect"] ?? 0);
     expect(arcs, "signal head should draw 3 bulbs (+glow rings)").toBeGreaterThanOrEqual(3);
@@ -371,8 +372,9 @@ describe("scenery", () => {
     const view = { l: target.x - 200, r: target.x + 200, t: target.y - 200, b: target.y + 200 };
     const [ctx] = mockCtx();
     const queue: QueueItem[] = [];
-    pushScenery(queue, ctx, view, { isDark: true, night: 0.8, time: 5 });
+    const d = { isDark: true, night: 0.8, time: 5 };
+    pushScenery(queue, ctx, view, d);
     expect(queue.length).toBeGreaterThanOrEqual(1);
-    expect(() => { for (const item of queue) item.draw(); }).not.toThrow();
+    expect(() => drawQueue(queue, ctx, d, true, 1)).not.toThrow();
   });
 });

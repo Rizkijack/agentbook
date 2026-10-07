@@ -6,7 +6,12 @@ import { DAY_LENGTH_SEC, Hc } from "@slopagentbook/shared";
 import { renderLlama } from "./renderer/draw.js";
 import { sf } from "./renderer/skeleton.js";
 import { BUF_W, BUF_H } from "./renderer/pixelBuffer.js";
-import { drawTerrainDecor, pushScenery, tickScenery, LAMP_GLOWS, type View, type SceneDraw } from "./scenery.js";
+import {
+  drawTerrainDecor, pushScenery, tickScenery, LAMP_GLOWS,
+  resetQueueItems, drawQueue,
+  TREE_DETAIL_MIN_ZOOM,
+  type View, type SceneDraw, type QueueItem,
+} from "./scenery.js";
 
 /**
  * The box the whole town has to fit inside, in CSS px.
@@ -320,6 +325,12 @@ export class Xf {
   viewW = 0;
   viewH = 0;
   dpr = 1;
+  /**
+   * The depth-sorted draw queue, kept on the instance so a frame reuses the
+   * array instead of building a new one. It holds references, not closures, so
+   * `length = 0` costs a pointer store rather than a collection.
+   */
+  private readonly queue: QueueItem[] = [];
 
   constructor(snapshot?: { herd: Array<{ id: string; name: string; handle: string; genes: string; mind: { doing: { place: string; act: string } }; born: number; }>; }) {
     if (snapshot) {
@@ -895,8 +906,13 @@ export class Xf {
     }
     ctx.stroke();
 
-    type Q = { y: number; draw: () => void };
-    const queue: Q[] = [];
+    // Reused across frames: it only ever holds references (see QueueItem), so
+    // emptying it releases nothing to the collector. The scenery half is drawn
+    // from a module-level pool, so both of the frame's big allocation sources
+    // are gone — this array is the last one that grows per frame.
+    const queue: QueueItem[] = this.queue;
+    queue.length = 0;
+    resetQueueItems();
 
     const viewLeft = cam.x - viewportW / 2 / cam.zoom - 120;
     const viewRight = cam.x + viewportW / 2 / cam.zoom + 120;
@@ -1266,7 +1282,11 @@ export class Xf {
     }
 
     queue.sort((a, b) => a.y - b.y);
-    for (const q of queue) q.draw();
+    // Two entry shapes share the queue: engine-owned closures (buildings,
+    // residents) and pooled scenery references (trees, props, lights,
+    // vehicles). drawQueue knows both — see QueueItem in scenery.ts for why
+    // the scenery half is pooled rather than a closure per object.
+    drawQueue(queue, ctx, sceneDraw, z >= TREE_DETAIL_MIN_ZOOM, z);
 
     // 08 §10.2 — diegetic announcement: the venue lights up so the town knows
     // where to look before any overlay appears

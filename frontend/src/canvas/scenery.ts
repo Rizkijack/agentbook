@@ -19,7 +19,106 @@ import type { RoadRect } from "@slopagentbook/shared";
 // a building added tomorrow cannot be silently paved over.
 // ---------------------------------------------------------------------------
 
-export interface QueueItem { y: number; draw: () => void; }
+/**
+ * A draw-queue entry, in one of two shapes.
+ *
+ * `draw` is a closure — the shape the buildings and residents in engine.ts use,
+ * where each draw body captures a dozen locals. That is fine for the ~106 of
+ * them and wrong for the 1,537 static scenery objects: measured at zoom 0.2188
+ * a frame pushed 1,730 queue entries, and each one allocated a closure AND an
+ * object for it. At 60fps that is ~208,000 short-lived objects a second, and the
+ * minor GCs it provokes are the pauses the player sees as stutter — the average
+ * frame was only 4ms, but the collector was handing back 15ms spikes.
+ *
+ * So the static half of the queue carries `kind` + `idx` instead and is drawn by
+ * `runItem`, which looks the object up in the module tables it already lives in.
+ * Those entries come from a module-level pool (`takeItem`), so after the first
+ * frame the static push path allocates nothing at all.
+ */
+export interface QueueItem {
+  y: number;
+  /** Closure form — engine-owned, self-contained draws. */
+  draw?: () => void;
+  /** Tagged form — a pooled reference into a scenery table. See runItem. */
+  kind?: number;
+  idx?: number;
+}
+
+/** Discriminants for the tagged QueueItem form. */
+export const QK_TREE = 0;
+export const QK_PROP = 1;
+export const QK_SCATTER = 2;
+export const QK_LIGHT = 3;
+export const QK_VEHICLE = 4;
+
+/**
+ * The pool behind the tagged form.
+ *
+ * Entries are handed out in push order and recycled on the next frame, so the
+ * pool only ever grows to the largest queue the camera has ever needed. Nothing
+ * here is retained across frames, which is why `resetQueueItems` can be called
+ * at the top of a frame without invalidating anything held elsewhere.
+ */
+const itemPool: QueueItem[] = [];
+let itemPoolUsed = 0;
+
+/**
+ * The zoom of the frame being drawn — see the long note beside its assignment
+ * in drawQueue. Declared here rather than next to the sprite code so it is
+ * unambiguously initialised before drawQueue can touch it.
+ */
+let frameZoom = 1;
+
+/** Frame boundary: hand every pooled entry back. Call once, before drawing. */
+export function resetQueueItems(): void {
+  itemPoolUsed = 0;
+}
+
+function takeItem(): QueueItem {
+  let it = itemPool[itemPoolUsed];
+  if (it === undefined) {
+    it = { y: 0 };
+    itemPool[itemPoolUsed] = it;
+  }
+  itemPoolUsed++;
+  it.draw = undefined;
+  it.idx = undefined;
+  return it;
+}
+
+/** Draws one tagged queue entry. `fullDetail` picks the tree tier. */
+export function runItem(ctx: CanvasRenderingContext2D, it: QueueItem, d: SceneDraw, fullDetail: boolean): void {
+  const idx = it.idx!;
+  switch (it.kind) {
+    case QK_TREE: drawTreeAny(ctx, TREES[idx]!, d, fullDetail); break;
+    case QK_PROP: drawProp(ctx, PROPS[idx]!, d); break;
+    case QK_SCATTER: drawProp(ctx, SCATTER[idx]!, d); break;
+    case QK_LIGHT: drawTrafficLight(ctx, LIGHTS[idx]!, d); break;
+    case QK_VEHICLE: drawVehicle(ctx, VEHICLES[idx]!, d); break;
+  }
+}
+
+/** True for the tagged (pooled) form, which runItem knows how to draw. */
+export function isTagged(it: QueueItem): boolean {
+  return it.draw === undefined;
+}
+
+/**
+ * Draw a whole queue, in the order it is already in.
+ *
+ * The queue arrives depth-sorted, and this is the one place that knows how to
+ * execute both entry shapes. engine.ts and the scenery tests both go through
+ * here, so "a queue entry is drawable" is a single definition rather than two
+ * that can drift apart.
+ */
+export function drawQueue(queue: QueueItem[], ctx: CanvasRenderingContext2D, d: SceneDraw, fullDetail: boolean, zoom = 1): void {
+  frameZoom = zoom;
+  for (let i = 0; i < queue.length; i++) {
+    const it = queue[i]!;
+    if (it.draw !== undefined) it.draw();
+    else runItem(ctx, it, d, fullDetail);
+  }
+}
 /**
  * The world-space viewport, plus the zoom it was derived at.
  *
@@ -3173,10 +3272,48 @@ const TUFTS_WORLD_PX = 4;
 export const TUFTS_MIN_ZOOM = TUFTS_MIN_PX / TUFTS_WORLD_PX;
 
 /**
- * Picket fences, in tiles. Constant, so this lives at module scope: it was an
- * array literal inside drawTerrainDecor, rebuilt on every frame for data that
- * never changes.
+ * A grid index over TUFTS, so a frame walks the cells under the viewport
+ * instead of the whole field.
+ *
+ * TUFTS is 14,778 points and a frame used to test every one of them against the
+ * view rectangle — 14,778 bounds checks to keep the ~1,800 that are actually on
+ * screen. That cull loop alone measured 333 us/f at zoom 0.2188, on a frame
+ * costing 4ms, and it scaled with the WORLD, not the viewport: panning to empty
+ * ground cost the same 14,778 checks as panning over the town.
+ *
+ * This is a CSR (count / prefix-sum / fill) index rather than an array of
+ * arrays, because 14,778 entries in per-cell arrays is 10,560 arrays for a grid
+ * this coarse — the flat form is three typed arrays and no per-cell objects.
+ *
+ * Cell size is derived: TUFTS are generated on a 6-tile grid, so 128 world px is
+ * 8 tiles — coarse enough that a cell holds ~1.4 tufts (one visit is cheaper
+ * than the bounds check it replaces) and fine enough that a cell is smaller than
+ * any viewport at the zooms where tufts are drawn at all.
  */
+const TUFTS_CELL = 128;
+const TUFTS_COLS = Math.ceil((Pe * V) / TUFTS_CELL);
+const TUFTS_ROWS = Math.ceil((vt * V) / TUFTS_CELL);
+const TUFTS_COUNT = TUFTS.length / 2;
+/** Cell -> [start, end) into TUFTS_ORDER. Length is cells + 1 (the sentinel). */
+const TUFTS_START = new Uint32Array(TUFTS_COLS * TUFTS_ROWS + 1);
+const TUFTS_ORDER = new Uint32Array(TUFTS_COUNT);
+
+(() => {
+  const cellOf = (x: number, y: number): number =>
+    Math.min(TUFTS_ROWS - 1, Math.max(0, (y / TUFTS_CELL) | 0)) * TUFTS_COLS +
+    Math.min(TUFTS_COLS - 1, Math.max(0, (x / TUFTS_CELL) | 0));
+
+  for (let i = 0; i < TUFTS_COUNT; i++) {
+    TUFTS_START[cellOf(TUFTS[i * 2]!, TUFTS[i * 2 + 1]!) + 1]++;
+  }
+  for (let c = 0; c < TUFTS_START.length - 1; c++) TUFTS_START[c + 1]! += TUFTS_START[c]!;
+
+  // fill, reusing TUFTS_START as a moving write cursor
+  const cursor = TUFTS_START.slice(0, TUFTS_START.length - 1);
+  for (let i = 0; i < TUFTS_COUNT; i++) {
+    TUFTS_ORDER[cursor[cellOf(TUFTS[i * 2]!, TUFTS[i * 2 + 1]!)]!++] = i;
+  }
+})();
 const FENCES = [
   { x: 66 + 419, y: 61 + 253, w: 11, h: 8 },   // schoolyard
   { x: 92 + 419, y: 81 + 253, w: 10, h: 7 },   // trough garden
@@ -3363,13 +3500,26 @@ export function drawTerrainDecor(ctx: CanvasRenderingContext2D, view: View, d: S
     ctx.strokeStyle = isDark ? "rgba(120,160,110,0.28)" : "rgba(70,120,60,0.35)";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let i = 0; i < TUFTS.length; i += 2) {
-      const x = TUFTS[i]!, y = TUFTS[i + 1]!;
-      if (!visible(x, y, 2, 2, view, 0)) continue;
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + 2, y - 4);
-      ctx.moveTo(x, y);
-      ctx.lineTo(x - 2, y - 3);
+    // Only the cells the viewport can reach — see TUFTS_START for why this is
+    // not a scan of every tuft on the map.
+    const c0 = Math.max(0, Math.min(TUFTS_COLS - 1, (view.l / TUFTS_CELL) | 0));
+    const c1 = Math.max(0, Math.min(TUFTS_COLS - 1, (view.r / TUFTS_CELL) | 0));
+    const r0 = Math.max(0, Math.min(TUFTS_ROWS - 1, (view.t / TUFTS_CELL) | 0));
+    const r1 = Math.max(0, Math.min(TUFTS_ROWS - 1, (view.b / TUFTS_CELL) | 0));
+    for (let row = r0; row <= r1; row++) {
+      const base = row * TUFTS_COLS;
+      for (let cell = base + c0; cell <= base + c1; cell++) {
+        const end = TUFTS_START[cell + 1]!;
+        for (let k = TUFTS_START[cell]!; k < end; k++) {
+          const i = TUFTS_ORDER[k]!;
+          const x = TUFTS[i * 2]!, y = TUFTS[i * 2 + 1]!;
+          if (!visible(x, y, 2, 2, view, 0)) continue;
+          ctx.moveTo(x, y);
+          ctx.lineTo(x + 2, y - 4);
+          ctx.moveTo(x, y);
+          ctx.lineTo(x - 2, y - 3);
+        }
+      }
     }
     ctx.stroke();
   }
@@ -3401,6 +3551,261 @@ const CANOPY = {
 export const TREE_DETAIL_SCREEN_PX = 14;
 const TREE_DETAIL_WORLD_PX = 40;
 export const TREE_DETAIL_MIN_ZOOM = TREE_DETAIL_SCREEN_PX / TREE_DETAIL_WORLD_PX;
+
+// --- raster sprite cache for the static half of the queue ------------------
+/**
+ * Trees, props and traffic lights are 1,537 of the ~1,650 objects a frame draws,
+ * and at the worst measured zoom (0.2188) they are 24,030 of the 31,188 canvas
+ * ops in the frame — 78%. None of them depend on the frame: a tree reads no
+ * `time` and no `night` at all, a prop reads `night` only to decide whether its
+ * bulb is lit, and a signal head reads `time` only through lightState(), which
+ * is three values per axis. So the frame was re-deriving the same ~150 distinct
+ * pictures 1,537 times.
+ *
+ * Each distinct picture is now rasterised once into an offscreen canvas and the
+ * per-object cost becomes one drawImage. The idiom is deliberately the resident
+ * sprite already in engine.ts (AgentSprite.sprite): an offscreen
+ * HTMLCanvasElement, a key built from the quantized state, ctx.drawImage at draw
+ * time, and the offscreen canvas + context re-used across rebuilds.
+ *
+ * Three decisions, each a trade rather than a free win:
+ *
+ * 1. RESOLUTION. A sprite is painted at `res * s0` device pixels per world
+ *    pixel, where res = clamp(round(dpr * zoom), 1, 2). At zoom 1 on a 1x display
+ *    that is exactly 1:1, so the raster carries the same pixel resolution the
+ *    vector path would have drawn it at. Below zoom 1 the sprite is MINIFIED,
+ *    which is the safe direction — edges soften by a fraction of a pixel and the
+ *    object is already a 5px blob at the worst zoom. Above zoom 1 it would be
+ *    MAGNIFIED, and that is a visible blur, so SPRITE_MAX_ZOOM hands everything
+ *    above 1:1 back to the vector path. A zoomed-in park used to be a soft
+ *    vector render and must not become soup.
+ *
+ * 2. SCALE BUCKETS. s ranges 0.800..1.350. One sprite per distinct s would be
+ *    5,581 of them. Quantized to 1/32 that is 18 buckets per kind, so the tree
+ *    table is 4 kinds x 18 buckets x 2 tiers x 2 themes x 2 resolutions = 576
+ *    slots, of which only the ones actually seen are ever built (lazy), and
+ *    SPRITE_CAP is a hard ceiling anyway. A tree painted into a bucket sprite is
+ *    blitted with the residual scale (s / s0), at most 0.9% off with 1/32
+ *    buckets — indistinguishable from drawing it at s exactly.
+ *
+ * 3. NO CANVAS, NO CACHE. jsdom has no 2d backend, so getContext("2d") returns
+ *    null under the test harness, and scenery.test.ts drives a Proxy that is not
+ *    a canvas at all. Every build goes through makeSprite, which probes once,
+ *    caches the negative answer, and returns null; every call site then falls
+ *    through to the vector path it replaced. The tests that count arcs and
+ *    ellipses therefore still exercise the vector code, and the cache can never
+ *    throw into a frame.
+ */
+interface SpriteBox { ox: number; oy: number; w: number; h: number; }
+
+interface ScenerySprite {
+  canvas: HTMLCanvasElement;
+  /** Local box origin, world px at scale 1, offset from the object's anchor. */
+  ox: number;
+  oy: number;
+  /** Local box size, world px at scale 1. */
+  w: number;
+  h: number;
+}
+
+/** Above this zoom the raster path hands back to the vector path — see 1. */
+const SPRITE_MAX_ZOOM = 1;
+
+/** Hard ceiling on cached sprites; past it everything falls back to vectors. */
+const SPRITE_CAP = 1024;
+
+/** null = never probed, false = no offscreen 2d available (jsdom). */
+let spriteProbe: boolean | null = null;
+let spriteBuilt = 0;
+
+/**
+ * The zoom of the frame being drawn.
+ *
+ * drawQueue sets this from its own `fullDetail` argument's companion before it
+ * runs any item, and the sprite path reads it. That ordering is what makes it
+ * correct rather than merely convenient: engine.ts pushes a queue and then draws
+ * it in the same statement sequence, so the zoom recorded by the push is always
+ * the one the draw belongs to.
+ *
+ * It used to be written by pushScenery instead. That was one refactor away from
+ * a real bug — two Xf instances can be alive at once, so a push for one camera
+ * between another camera's push and its draw would silently re-point the other
+ * frame's sprite resolution. Setting it in drawQueue closes that window, because
+ * nothing runs between a queue's push and its draw that is not part of that
+ * same draw.
+ */
+
+/** Device pixels per sprite pixel — see decision 1. */
+function spriteRes(): number {
+  const dpr = typeof window !== "undefined" ? Math.min(2, window.devicePixelRatio || 1) : 1;
+  return Math.max(1, Math.min(2, Math.round(dpr * frameZoom)));
+}
+
+/**
+ * Can this environment hand out an offscreen 2d context at all?
+ *
+ * Asked once and cached, because the answer cannot change and because the ask
+ * is not free: jsdom has no canvas backend, so getContext("2d") reports itself
+ * unimplemented on the way to returning null. Probing per variant would repeat
+ * that on every build attempt; asking once means a jsdom run sees it a single
+ * time and then stays on the vector path.
+ */
+function offscreenAvailable(): boolean {
+  if (spriteProbe !== null) return spriteProbe;
+  if (typeof document === "undefined") return (spriteProbe = false);
+  try {
+    spriteProbe = document.createElement("canvas").getContext("2d") !== null;
+  } catch {
+    spriteProbe = false;
+  }
+  return spriteProbe;
+}
+
+/**
+ * Rasterise one variant, or return null and stay on the vector path.
+ *
+ * The box is in world px at scale 1; `s0` is the scale the variant was quantised
+ * to. Everything is drawn through this, so a missing canvas, a thrown
+ * getContext, or a full cache all degrade to "no sprite" rather than to an
+ * exception in the middle of a frame.
+ */
+function makeSprite(
+  res: number,
+  s0: number,
+  box: SpriteBox,
+  paint: (o: CanvasRenderingContext2D) => void,
+): ScenerySprite | null {
+  if (!offscreenAvailable() || spriteBuilt >= SPRITE_CAP) return null;
+  let canvas: HTMLCanvasElement;
+  let octx: CanvasRenderingContext2D;
+  try {
+    canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.ceil(box.w * s0 * res));
+    canvas.height = Math.max(1, Math.ceil(box.h * s0 * res));
+    const got = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+    if (!got) { spriteProbe = false; return null; }
+    octx = got;
+  } catch {
+    spriteProbe = false;
+    return null;
+  }
+  const k = s0 * res;
+  octx.save();
+  octx.scale(k, k);
+  octx.translate(-box.ox, -box.oy);
+  paint(octx);
+  octx.restore();
+  spriteBuilt++;
+  return { canvas, ox: box.ox, oy: box.oy, w: box.w, h: box.h };
+}
+
+/** One drawImage per object — the whole point of the cache. */
+function blit(ctx: CanvasRenderingContext2D, spr: ScenerySprite, ax: number, ay: number, k: number): void {
+  ctx.drawImage(spr.canvas, ax + spr.ox * k, ay + spr.oy * k, spr.w * k, spr.h * k);
+}
+
+// Trees. kind x scale bucket x detail tier x theme x resolution.
+const TREE_KIND_ID: Record<Tree["kind"], number> = { oak: 0, pine: 1, bush: 2, birch: 3 };
+const TREE_S_MIN = 0.8;
+const TREE_S_SPAN = 0.55;
+const TREE_BUCKETS = 18;
+// Bounds read off the draw calls: the widest crown is oak's arc(6,-15,8) and the
+// tallest is pine's moveTo(0,-36), both at scale 1; the shadow ellipse reaches
+// y+4. Cheap tier is the 11-radius disc at y-14 plus the same shadow.
+const TREE_BOX_FULL: SpriteBox = { ox: -15, oy: -38, w: 30, h: 43 };
+const TREE_BOX_CHEAP: SpriteBox = { ox: -12, oy: -26, w: 24, h: 31 };
+const treeSprites: Array<ScenerySprite | null | undefined> = new Array(4 * TREE_BUCKETS * 8);
+
+function treeSprite(t: Tree, d: SceneDraw, fullDetail: boolean): ScenerySprite | null {
+  const kind = TREE_KIND_ID[t.kind];
+  const res = spriteRes();
+  let b = Math.floor((t.s - TREE_S_MIN) * (TREE_BUCKETS / TREE_S_SPAN));
+  if (b < 0) b = 0;
+  else if (b >= TREE_BUCKETS) b = TREE_BUCKETS - 1;
+  const i = ((((kind * TREE_BUCKETS + b) * 2 + (fullDetail ? 1 : 0)) * 2 + (d.isDark ? 1 : 0)) * 2 + (res - 1));
+  const hit = treeSprites[i];
+  if (hit !== undefined) return hit;
+  const s0 = TREE_S_MIN + (b + 0.5) * (TREE_S_SPAN / TREE_BUCKETS);
+  const unit: Tree = { x: 0, y: 0, kind: t.kind, s: 1 };
+  const built = makeSprite(res, s0, fullDetail ? TREE_BOX_FULL : TREE_BOX_CHEAP, (octx) => {
+    (fullDetail ? drawTree : drawTreeCheap)(octx, unit, d);
+  });
+  treeSprites[i] = built;
+  return built;
+}
+
+function drawTreeAny(ctx: CanvasRenderingContext2D, t: Tree, d: SceneDraw, fullDetail: boolean): void {
+  if (frameZoom <= SPRITE_MAX_ZOOM) {
+    const spr = treeSprite(t, d, fullDetail);
+    if (spr) { blit(ctx, spr, t.x, t.y, t.s); return; }
+  }
+  (fullDetail ? drawTree : drawTreeCheap)(ctx, t, d);
+}
+
+// Props. kind x (flower colour phase) x night-on x theme x resolution.
+// A shared box the size of the tallest prop would waste fill on every bench, so
+// the high-volume kinds get their measured bounds and the rest share one.
+const PROP_KINDS = [
+  "lamp", "light", "pole", "bench", "busstop", "mailbox", "hydrant", "billboard",
+  "bale", "crate", "barrel", "picnic", "well", "sign", "windmill", "watertower",
+  "flower", "rock",
+] as const;
+const PROP_KIND_ID = new Map<string, number>(PROP_KINDS.map((k, i) => [k as string, i]));
+const PROP_BOX: Record<string, SpriteBox> = {
+  lamp: { ox: -7, oy: -29, w: 17, h: 32 },
+  pole: { ox: -7, oy: -28, w: 14, h: 29 },
+  bench: { ox: -10, oy: -8, w: 20, h: 12 },
+  crate: { ox: -9, oy: -13, w: 18, h: 17 },
+  barrel: { ox: -8, oy: -17, w: 16, h: 21 },
+  bale: { ox: -10, oy: -17, w: 20, h: 22 },
+  picnic: { ox: -14, oy: -8, w: 28, h: 13 },
+  sign: { ox: -10, oy: -23, w: 20, h: 23 },
+};
+// Fits every remaining kind: the watertower tank tops out at y-47 and the
+// bus-stop sign reaches x=19; the deepest shadow is y+4.
+const PROP_BOX_DEFAULT: SpriteBox = { ox: -21, oy: -49, w: 42, h: 54 };
+const propSprites: Array<ScenerySprite | null | undefined> = new Array(PROP_KINDS.length * 16);
+
+function propSprite(p: Prop, d: SceneDraw): ScenerySprite | null {
+  const kind = PROP_KIND_ID.get(p.kind);
+  if (kind === undefined) return null;
+  if (p.kind === "windmill") return null; // its blades rotate with time
+  const res = spriteRes();
+  // `night` reaches exactly one prop — the lamp bulb — so only lamps pay for a
+  // second variant instead of the whole table doubling.
+  const nightOn = p.kind === "lamp" && d.night > 0.15 ? 1 : 0;
+  // the flower picks its petal colour off its seed, so that is a 4-way axis
+  const phase = p.kind === "flower" ? Math.floor(p.seed * 10) % 4 : 0;
+  const i = ((((kind * 4 + phase) * 2 + nightOn) * 2 + (d.isDark ? 1 : 0)) * 2 + (res - 1));
+  const hit = propSprites[i];
+  if (hit !== undefined) return hit;
+  // drawPropVector translates to p.x/p.y, so it has to be handed a prop pinned
+  // to the origin — a real p would land thousands of pixels outside a 42px
+  // sprite. `seed` carries through because the flower's colour reads it.
+  const unit: Prop = { kind: p.kind, x: 0, y: 0, seed: p.seed };
+  const built = makeSprite(res, 1, PROP_BOX[p.kind] ?? PROP_BOX_DEFAULT, (octx) => drawPropVector(octx, unit, d));
+  propSprites[i] = built;
+  return built;
+}
+
+// Traffic lights: hState x vState x theme x resolution = 9 x 2 x 2.
+const LIGHT_BOX: SpriteBox = { ox: -8, oy: -56, w: 19, h: 59 };
+const lightSprites: Array<ScenerySprite | null | undefined> = new Array(36);
+const LIGHTS_ORDER: LightState[] = ["red", "yellow", "green"];
+
+function trafficLightSprite(L: Light, d: SceneDraw): ScenerySprite | null {
+  const res = spriteRes();
+  const h = lightState(d.time, "h");
+  const v = lightState(d.time, "v");
+  const i = (((LIGHTS_ORDER.indexOf(h) * 3 + LIGHTS_ORDER.indexOf(v)) * 2 + (d.isDark ? 1 : 0)) * 2 + (res - 1));
+  const hit = lightSprites[i];
+  if (hit !== undefined) return hit;
+  // as with props: the vector form translates to L.x/L.y, so pin it to the origin
+  const unit: Light = { ix: 0, iy: 0, cx: 0, cy: 0, x: 0, y: 0 };
+  const built = makeSprite(res, 1, LIGHT_BOX, (octx) => drawTrafficLightVector(octx, unit, d));
+  lightSprites[i] = built;
+  return built;
+}
 
 /**
  * The same tree as one shadow ellipse + one canopy disc, for when the crown is
@@ -3490,6 +3895,15 @@ function drawTree(ctx: CanvasRenderingContext2D, t: Tree, d: SceneDraw): void {
 }
 
 function drawProp(ctx: CanvasRenderingContext2D, p: Prop, d: SceneDraw): void {
+  if (frameZoom <= SPRITE_MAX_ZOOM) {
+    const spr = propSprite(p, d);
+    if (spr) { blit(ctx, spr, p.x, p.y, 1); return; }
+  }
+  drawPropVector(ctx, p, d);
+}
+
+/** The vector form, unchanged — still the path taken above zoom 1 and without a canvas. */
+function drawPropVector(ctx: CanvasRenderingContext2D, p: Prop, d: SceneDraw): void {
   const { isDark, night, time } = d;
   const x = p.x, y = p.y;
   const metal = isDark ? "#4a4741" : "#3c3a35";
@@ -3714,6 +4128,15 @@ function drawProp(ctx: CanvasRenderingContext2D, p: Prop, d: SceneDraw): void {
 }
 
 function drawTrafficLight(ctx: CanvasRenderingContext2D, L: Light, d: SceneDraw): void {
+  if (frameZoom <= SPRITE_MAX_ZOOM) {
+    const spr = trafficLightSprite(L, d);
+    if (spr) { blit(ctx, spr, L.x, L.y, 1); return; }
+  }
+  drawTrafficLightVector(ctx, L, d);
+}
+
+/** The vector form, unchanged — still the path taken above zoom 1 and without a canvas. */
+function drawTrafficLightVector(ctx: CanvasRenderingContext2D, L: Light, d: SceneDraw): void {
   const { isDark, time } = d;
   const x = L.x, y = L.y;
   ctx.save();
@@ -3876,26 +4299,48 @@ export function pushScenery(queue: QueueItem[], ctx: CanvasRenderingContext2D, v
   // only shows when the crown is large enough to hold it, which the threshold
   // checks once per frame rather than once per tree.
   const fullDetail = (view.zoom ?? 1) >= TREE_DETAIL_MIN_ZOOM;
-  const tree = fullDetail ? drawTree : drawTreeCheap;
+  // frameZoom is deliberately NOT written here. The raster cache needs the zoom,
+  // but a push is not a draw: two queues can be pushed before either is drawn,
+  // so recording it here would let the second push re-point the first draw's
+  // sprite resolution. drawQueue sets it, immediately before the items run.
 
-  for (const t of TREES) {
+  // Every entry below is a pooled reference, not a closure: see QueueItem for
+  // why. `ctx` and `d` are deliberately NOT captured — runItem takes them as
+  // arguments at draw time, so a queued entry stays valid even if the caller
+  // changes theme between the push and the draw.
+  for (let i = 0; i < TREES.length; i++) {
+    const t = TREES[i]!;
     if (!inView(t.x, t.y)) continue;
-    queue.push({ y: t.y, draw: () => tree(ctx, t, d) });
+    const it = takeItem();
+    it.y = t.y; it.kind = QK_TREE; it.idx = i;
+    queue.push(it);
   }
-  for (const p of PROPS) {
+  for (let i = 0; i < PROPS.length; i++) {
+    const p = PROPS[i]!;
     if (!inView(p.x, p.y)) continue;
-    queue.push({ y: p.y, draw: () => drawProp(ctx, p, d) });
+    const it = takeItem();
+    it.y = p.y; it.kind = QK_PROP; it.idx = i;
+    queue.push(it);
   }
-  for (const p of SCATTER) {
+  for (let i = 0; i < SCATTER.length; i++) {
+    const p = SCATTER[i]!;
     if (!inView(p.x, p.y)) continue;
-    queue.push({ y: p.y, draw: () => drawProp(ctx, p, d) });
+    const it = takeItem();
+    it.y = p.y; it.kind = QK_SCATTER; it.idx = i;
+    queue.push(it);
   }
-  for (const L of LIGHTS) {
+  for (let i = 0; i < LIGHTS.length; i++) {
+    const L = LIGHTS[i]!;
     if (!inView(L.x, L.y)) continue;
-    queue.push({ y: L.y, draw: () => drawTrafficLight(ctx, L, d) });
+    const it = takeItem();
+    it.y = L.y; it.kind = QK_LIGHT; it.idx = i;
+    queue.push(it);
   }
-  for (const v of VEHICLES) {
+  for (let i = 0; i < VEHICLES.length; i++) {
+    const v = VEHICLES[i]!;
     if (!inView(v.x, v.y)) continue;
-    queue.push({ y: v.y, draw: () => drawVehicle(ctx, v, d) });
+    const it = takeItem();
+    it.y = v.y; it.kind = QK_VEHICLE; it.idx = i;
+    queue.push(it);
   }
 }
