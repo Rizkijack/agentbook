@@ -1,3 +1,5 @@
+export * from "./acts.js";
+export * from "./relmap.js";
 export * from "./types.js";
 export * from "./config.js";
 export * from "./map.js";

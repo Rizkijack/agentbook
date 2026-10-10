@@ -187,6 +187,62 @@ describe("Agent gateway", () => {
     expect(res.body.error).toMatch(/board/);
   });
 
+  // `act` used to be length-bounded only, so "teleport" was persisted to
+  // mind.doing.act, written to town.json and re-broadcast in /api/snapshot.
+  // It must be refused with the allowed set named, so a confused agent can
+  // correct itself on the next call.
+  it("POST /api/agent/act rejects an act outside the resident verb set", async () => {
+    const resident = world.herd.find((h) => h.id === residentId)!;
+    const before = { ...resident.mind.doing };
+    const needsBefore = { ...resident.needs };
+    const ordersBefore = broadcasts.length;
+
+    const res = await request(spyApp)
+      .post("/api/agent/act")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ act: "teleport", place: "square" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid payload");
+    const fieldMsg = JSON.stringify(res.body.details?.fieldErrors?.act ?? "");
+    expect(fieldMsg).toContain("teleport");
+    expect(fieldMsg).toContain("wander"); // the message names the allowed set
+
+    // nothing moved: no state change, no SSE emission
+    expect(resident.mind.doing).toEqual(before);
+    expect(resident.needs).toEqual(needsBefore);
+    expect(broadcasts.length).toBe(ordersBefore);
+  });
+
+  it("POST /api/agent/act rejects a near-miss verb (case and whitespace are not normalised)", async () => {
+    for (const bad of ["Teleport", " work", "work ", "TELEPORT"]) {
+      const res = await request(spyApp)
+        .post("/api/agent/act")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ act: bad });
+      expect(res.status, `act=${JSON.stringify(bad)} must be refused`).toBe(400);
+    }
+  });
+
+  it("POST /api/agent/act accepts every documented verb, including the sim-less aliases", async () => {
+    // move/rest/speak/chat are advertised by the MCP tool schema and the
+    // frontend docs view but carry no tickNeeds delta. They must keep working —
+    // the allowlist is a membership test, not a simulator-behaviour test.
+    for (const act of ["move", "rest", "speak", "chat", "wander", "stroll", "explore", "work", "graze", "drink", "sleep", "talk", "argue", "spit"]) {
+      const res = await request(spyApp)
+        .post("/api/agent/act")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ act });
+      expect(res.status, `act=${act} must be accepted`).toBe(200);
+      expect(res.body.doing.act).toBe(act);
+    }
+  });
+
+  it("POST /api/agent/act still needs the session — the verb check is not an auth bypass", async () => {
+    const res = await request(spyApp).post("/api/agent/act").send({ act: "teleport" });
+    expect(res.status).toBe(401);
+  });
+
   // Browser session regression: the routes above must also accept the httpOnly
   // sabk_session cookie, so the chat UI can talk without ever holding the token
   // in JavaScript. Bearer keeps precedence — see session.test.ts for the full

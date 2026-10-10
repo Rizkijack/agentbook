@@ -1,8 +1,9 @@
 import type { TownSnapshot, SSEOrder } from "@slopagentbook/shared";
-import { isNpcSkillId } from "@slopagentbook/shared";
+import { isNpcSkillId, isResidentAct, pruneRelationships } from "@slopagentbook/shared";
 import type { Brain } from "./brain.js";
 import { decide as simDecide } from "./simbrain.js";
 import { tickNeeds, dayClock } from "./needs.js";
+import { getMemoryProvider } from "./memory.js";
 import { LOCATION_BY_ID } from "./locations.js";
 import { postToBoard } from "./bbs.js";
 
@@ -86,6 +87,14 @@ export function applyDecision(
   const place = placeOk ? decision.place : agent.mind.doing.place;
   const loc = LOCATION_BY_ID.get(place);
   const placeName = loc ? loc.name.toLowerCase() : place;
+  // Second gate on `act`, mirroring the `skill` one below. The gateway rejects a
+  // bad verb with 400 before it gets here, but this is the shared choke point
+  // for BOTH callers — the scheduler feeds in `brain.decide()`, whose LLM branch
+  // returns an unvalidated `act: string` from the model. Without this, a model
+  // that answered "teleport" would write it straight into mind.doing.act.
+  // Degrades to "wander" (the sim's own default movement act) rather than
+  // throwing: one bad model reply must never stall the town.
+  const act = isResidentAct(decision.act) ? decision.act : "wander";
   const decisionAny = decision as any;
   // choke point for the sim scheduler AND the gateway: only ids present in
   // NPC_SKILLS survive, so the UI never receives a garbage skill. The miss case
@@ -93,15 +102,17 @@ export function applyDecision(
   // dropped key would leave the resident's previous skill label stuck on the HUD.
   const skill = isNpcSkillId(decision.skill) ? decision.skill : "";
 
-  // Move & Apply: update needs and mind
-  agent.needs = tickNeeds(agent.needs, decision.act, secs);
+  // Move & Apply: update needs and mind. Everything below reads `act`, never
+  // `decision.act`, so a rejected verb cannot drive needs, spirits, quests or
+  // the broadcast payload.
+  agent.needs = tickNeeds(agent.needs, act, secs);
   // mood drift for spit
-  if (decision.act === "spit") agent.mind.spirits = Math.max(-1, agent.mind.spirits - 0.2);
+  if (act === "spit") agent.mind.spirits = Math.max(-1, agent.mind.spirits - 0.2);
   // small spirits drift for social positive
-  if (decision.act === "talk" || decision.act === "wander" || decision.act === "stroll") {
+  if (act === "talk" || act === "wander" || act === "stroll") {
     if (nearbyDetailed.length > 0) agent.mind.spirits = Math.min(1, agent.mind.spirits + 0.04);
   }
-  if (decision.act === "argue") agent.mind.spirits = Math.max(-1, agent.mind.spirits - 0.06);
+  if (act === "argue") agent.mind.spirits = Math.max(-1, agent.mind.spirits - 0.06);
 
   let createdPost: TownSnapshot["feed"][number] | undefined;
   let spitEvent: SpitEvent | undefined;
@@ -159,16 +170,23 @@ export function applyDecision(
     }
     agent.mind.memories.unshift(decision.speech.slice(0, 80));
     if (agent.mind.memories.length > 12) agent.mind.memories.length = 12;
+    // Vault archive is sim-only. applyDecision is shared with the agent gateway,
+    // so an external agent's speech lands in mind.memories here too — and that is
+    // third-party text. The vault is public, so it must never reach it.
+    if (agent.mind.control !== "external") {
+      void getMemoryProvider().add(agent.id, decision.speech);
+    }
     createdPost = post;
 
     // Relationship update on chat — instinct social bonding
     if (targetId) {
       const target = world.herd.find((h) => h.id === targetId);
       if (target) {
-        const delta = decision.act === "argue" ? -0.07 : decision.act === "talk" ? 0.06 : isReply ? 0.04 : 0.02;
+        const delta = act === "argue" ? -0.07 : act === "talk" ? 0.06 : isReply ? 0.04 : 0.02;
         agent.mind.relationships[targetId] = Math.max(-1, Math.min(1, (agent.mind.relationships[targetId] ?? 0) + delta));
         // reciprocal small
         target.mind.relationships[agent.id] = Math.max(-1, Math.min(1, (target.mind.relationships[agent.id] ?? 0) + delta * 0.6));
+        pruneRelationships(target.mind);
         // also remember this conversation
         if (target.mind.memories.length < 12) {
           target.mind.memories.unshift(`${agent.name}: ${decision.speech.slice(0, 60)}`);
@@ -185,7 +203,7 @@ export function applyDecision(
 
   // occasionally spit - instinct aggression when arguing with nearby
   // increased a bit for realism but still rare (6% when argue)
-  const spitChance = nearbyIds.length > 0 && decision.act === "argue" ? 0.06 : nearbyIds.length > 0 && decision.act === "talk" && agent.mind.spirits < -0.3 ? 0.02 : 0;
+  const spitChance = nearbyIds.length > 0 && act === "argue" ? 0.06 : nearbyIds.length > 0 && act === "talk" && agent.mind.spirits < -0.3 ? 0.02 : 0;
   if (spitChance > 0 && rng() < spitChance) {
     const victim = nearbyIds[Math.floor(rng() * nearbyIds.length)]!;
     const spitPost: TownSnapshot["feed"][number] = {
@@ -208,11 +226,17 @@ export function applyDecision(
       // relationship damage
       agent.mind.relationships[victim] = Math.max(-1, (agent.mind.relationships[victim] ?? 0) - 0.25);
       v.mind.relationships[agent.id] = Math.max(-1, (v.mind.relationships[agent.id] ?? 0) - 0.35);
+      pruneRelationships(v.mind);
     }
   }
 
+  // The relationship map only ever grows — nothing removes an entry, so without a
+  // cap it reaches one pair per herd member. Pruned once per decision rather than
+  // at each write; see shared/relmap.ts.
+  pruneRelationships(agent.mind);
+
   agent.mind.doing = {
-    act: decision.act,
+    act,
     place,
     placeName,
     since: Date.now(),
@@ -227,7 +251,7 @@ export function applyDecision(
 
   world.now = Date.now();
 
-  const order: OrderEvent = { type: "order", id: agent.id, act: decision.act, place, secs, skill, why: decision.reason };
+  const order: OrderEvent = { type: "order", id: agent.id, act, place, secs, skill, why: decision.reason };
   return { order, spit: spitEvent, post: createdPost };
 }
 

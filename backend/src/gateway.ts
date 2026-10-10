@@ -1,7 +1,7 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import type { TownSnapshot, Resident, AgentRecord, Post, Contest } from "@slopagentbook/shared";
-import { CONTEST } from "@slopagentbook/shared";
+import { CONTEST, isResidentAct, unknownActMessage } from "@slopagentbook/shared";
 import { z } from "zod";
 import {
   joinWorld,
@@ -89,7 +89,12 @@ const joinSchema = z.object({
 });
 
 const actSchema = z.object({
-  act: z.string().min(1).max(32),
+  // Membership, not just length: `act` reaches mind.doing.act, is persisted to
+  // town.json and is re-broadcast to every client in /api/snapshot, so an
+  // arbitrary verb is unbounded agent input in shared state. `place` and
+  // `skill` are gated the same way below (LOCATION_BY_ID / isNpcSkillId) — this
+  // closes the third and last hole in that set.
+  act: z.string().min(1).max(32).refine(isResidentAct, (act) => ({ message: unknownActMessage(act) })),
   place: z.string().max(64).optional(),
   speech: z.string().max(280).optional(),
   targetId: z.string().max(64).optional(),

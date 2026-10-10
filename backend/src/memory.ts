@@ -1,8 +1,10 @@
 import type { TownSnapshot } from "@slopagentbook/shared";
-import { existsSync, mkdirSync, appendFileSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, appendFileSync } from "fs";
 import path from "path";
 
-// Dual memory: Honcho local (file) + Mem0 cloud (fetch if MEM0_API_KEY)
+// Memory sink: the working set is `mind.memories` on the resident (12 lines,
+// persisted in town.json). That is all the sim ever reads. The vault note below is
+// the durable archive — append-only, never read back by the sim.
 
 export interface MemoryProvider {
   add(agentId: string, text: string, meta?: Record<string, unknown>): Promise<void>;
@@ -15,14 +17,39 @@ export function setWorldRef(w: TownSnapshot) {
   worldRef = w;
 }
 
-function ensureDir(p: string) {
-  try {
-    mkdirSync(path.dirname(p), { recursive: true });
-  } catch {}
+/** Vault note. `OBSIDIAN_VAULT_PATH` is the only supported location — the vault
+ *  holds the operator's own engineering notes, so there is no guessing a path. */
+function vaultNote(): string | null {
+  const vault = process.env.OBSIDIAN_VAULT_PATH?.trim();
+  if (!vault) return null;
+  return path.join(vault, "Towns", "hermesbook", "Town.md");
 }
 
-// Honcho local — file per agent + world.herd memories
-export const honcho: MemoryProvider = {
+const HEADER = "# Town memory\n\nPer-resident archive for SlopAgentbook. Appended by the backend turn loop.\n";
+
+/**
+ * Append `residentId: text` to the vault note.
+ *
+ * Writes are gated on sim control at the call site (turn.ts), not here: this
+ * function cannot know who authored the line. That gate is what keeps
+ * externally-authored posts — anything an agent outside the project writes to
+ * /api/agent/say — out of a vault that is public.
+ */
+async function appendToVault(agentId: string, text: string): Promise<void> {
+  const note = vaultNote();
+  if (!note) return;
+  const line = `- **${agentId}**: ${text.replace(/\s*\n\s*/g, " ").trim()}\n`;
+  try {
+    mkdirSync(path.dirname(note), { recursive: true });
+    if (!existsSync(note)) appendFileSync(note, HEADER, "utf8");
+    appendFileSync(note, line, "utf8");
+  } catch {
+    // An unwritable vault must never stall a turn.
+  }
+}
+
+/** Sim residents only. `mind.memories` stays the working set the sim reads. */
+export const vault: MemoryProvider = {
   async add(agentId, text) {
     if (worldRef) {
       const a = worldRef.herd.find((h) => h.id === agentId);
@@ -31,80 +58,22 @@ export const honcho: MemoryProvider = {
         if (a.mind.memories.length > 12) a.mind.memories.length = 12;
       }
     }
-    const base = process.env.HONCHO_PATH ?? "data/memories";
-    const file = path.join(base, `${agentId}.jsonl`);
-    ensureDir(file);
-    try {
-      appendFileSync(file, JSON.stringify({ t: Date.now(), text }) + "\n");
-    } catch {}
+    await appendToVault(agentId, text);
   },
+  /** Substring over the working set — the same honest limit the old local sink
+   *  had. Vault is write-only in this phase, so this never touches the archive. */
   async search(agentId, query) {
-    const base = process.env.HONCHO_PATH ?? "data/memories";
-    const file = path.join(base, `${agentId}.jsonl`);
-    if (!existsSync(file)) return [];
-    try {
-      const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
-      return lines
-        .map((l) => JSON.parse(l).text as string)
-        .filter((t) => t.toLowerCase().includes(query.toLowerCase()))
-        .slice(0, 5);
-    } catch {
-      return [];
-    }
+    const a = worldRef?.herd.find((h) => h.id === agentId);
+    if (!a) return [];
+    const q = query.toLowerCase();
+    return a.mind.memories.filter((t) => t.toLowerCase().includes(q)).slice(0, 5);
   },
   async getRecent(agentId, limit) {
-    if (worldRef) {
-      const a = worldRef.herd.find((h) => h.id === agentId);
-      if (a) return a.mind.memories.slice(0, limit);
-    }
-    const base = process.env.HONCHO_PATH ?? "data/memories";
-    const file = path.join(base, `${agentId}.jsonl`);
-    if (!existsSync(file)) return [];
-    try {
-      const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
-      return lines
-        .slice(-limit)
-        .map((l) => JSON.parse(l).text as string)
-        .reverse();
-    } catch {
-      return [];
-    }
+    const a = worldRef?.herd.find((h) => h.id === agentId);
+    return a ? a.mind.memories.slice(0, limit) : [];
   },
 };
 
-export const mem0: MemoryProvider | null = process.env.MEM0_API_KEY
-  ? {
-      async add(agentId, text) {
-        try {
-          await fetch("https://api.mem0.ai/v1/memories", {
-            method: "POST",
-            headers: {
-              Authorization: `Token ${process.env.MEM0_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ user_id: agentId, text, metadata: { source: "slopagentbook" } }),
-          });
-        } catch {}
-        // also mirror to honcho
-        await honcho.add(agentId, text);
-      },
-      async search(agentId, query) {
-        try {
-          const r = await fetch(`https://api.mem0.ai/v1/memories?user_id=${agentId}&query=${encodeURIComponent(query)}`, {
-            headers: { Authorization: `Token ${process.env.MEM0_API_KEY}` },
-          });
-          const j = (await r.json()) as { results?: Array<{ memory: string }> };
-          return (j.results ?? []).map((x) => x.memory).slice(0, 5);
-        } catch {
-          return honcho.search(agentId, query);
-        }
-      },
-      async getRecent(agentId, limit) {
-        return honcho.getRecent(agentId, limit);
-      },
-    }
-  : null;
-
 export function getMemoryProvider(): MemoryProvider {
-  return mem0 ?? honcho;
+  return vault;
 }

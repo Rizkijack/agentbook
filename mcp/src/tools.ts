@@ -1,4 +1,4 @@
-import { dayClock, type Post, type Quest, type Resident, type TownSnapshot, type TownEvent } from "@slopagentbook/shared";
+import { dayClock, topRelationships, RESIDENT_ACTS, type Post, type Quest, type Resident, type TownSnapshot, type TownEvent } from "@slopagentbook/shared";
 import { SlopAgentbookClient, type Perceive } from "./client.js";
 
 // ---------------------------------------------------------------------------
@@ -96,15 +96,6 @@ function residentDetail(r: Resident) {
     needs: r.needs,
     relationships: topRelationships(r.mind.relationships, 5),
   };
-}
-
-/** keep the strongest ties only — a full relationship map is too big for context */
-function topRelationships(map: Record<string, number>, n: number): Record<string, number> {
-  return Object.fromEntries(
-    Object.entries(map)
-      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
-      .slice(0, n),
-  );
 }
 
 function activeQuests(quests: Quest[]): Quest[] {
@@ -297,10 +288,10 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: "act",
-    description: "Do something in the world (move, work, rest, talk...). Requires join_town first.",
+    description: `Do something in the world (move, work, rest, talk...). Requires join_town first. The verb must be one of: ${RESIDENT_ACTS.join(", ")}`,
     inputSchema: obj(
       {
-        act: str('the act verb, e.g. "work", "rest", "graze", "chat"'),
+        act: str(`the act verb; one of: ${RESIDENT_ACTS.join(", ")}`),
         place: str("place id to move to; invalid place falls back to current position"),
         speech: str("what you say while acting (max 280 chars)"),
         targetId: str("resident id you act towards"),

@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import type { TownSnapshot, Resident } from "@slopagentbook/shared";
 import { Hc, rf, encodeGenes } from "@slopagentbook/shared";
-import { defaultConfig } from "@slopagentbook/shared";
+import { defaultConfig, pruneRelationships } from "@slopagentbook/shared";
 import { saveAtomically, saveDebounced, flushDebounced } from "./persist.js";
 import { normalizeHerd } from "./pgstore.js";
 import { createInitialWorld, makeResidentFromFork, generateEdition, generateWeatherEvent } from "./world.js";
@@ -11,6 +11,7 @@ import { updateQuestProgress, claimQuest, refreshExpiredQuests, generateQuest, c
 import { LOCATIONS, LOCATION_BY_ID } from "./locations.js";
 import { spend } from "./spend.js";
 import { createBrain } from "./brain.js";
+import { setWorldRef } from "./memory.js";
 import { createScheduler } from "./scheduler.js";
 import { runTurn } from "./turn.js";
 import { createGatewayRouter } from "./gateway.js";
@@ -59,6 +60,11 @@ try {
 } catch {
   world = createInitialWorld();
 }
+
+// Trim relationship maps already over the cap in a pre-cap save. Writes prune on
+// every decision, but a resident who never acts would otherwise stay fat forever,
+// and their map is paid for by every client on every snapshot. See shared/relmap.ts.
+for (const r of world.herd) pruneRelationships(r.mind);
 
 if (!Array.isArray((world as any).quests)) (world as any).quests = [];
 if (world.quests.length === 0) {
@@ -170,6 +176,10 @@ if (
 // from the herd, so the bots join the rotation and are driven by the sim like
 // every other resident.
 ensureHouseResidents(world);
+
+// The memory sink reads mind.memories off this ref. Without it every
+// getRecent/search call silently resolved against nothing.
+setWorldRef(world);
 
 const brain = createBrain();
 const scheduler = createScheduler(world.herd.map((h) => h.id));

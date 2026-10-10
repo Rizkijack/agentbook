@@ -7,6 +7,8 @@ data/town.json
 data/town.backup.json
 data/town.tmp.*
 data/*.bak
+# old local memory sink, replaced by the Obsidian vault note Towns/hermesbook/Town.md
+data/memories/
 frontend/dist
 backend/dist
 shared/dist
