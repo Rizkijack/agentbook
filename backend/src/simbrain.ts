@@ -96,6 +96,33 @@ const WANDER_THOUGHTS = [
   "pond south side? curious",
 ];
 
+/**
+ * Callbacks: quote back what this resident actually remembers about the person
+ * in front of them. Every other pool is a fixed string, so a resident could talk
+ * to the same neighbour all day without ever acknowledging a word they'd heard
+ * from them. `{said}` is a real line out of self.memories, which is what makes
+ * the tie visible on the canvas and in the feed.
+ */
+const CALLBACK_TEMPLATES = [
+  '{name} — still "{said}"?',
+  '{name}. "{said}". that is still the whole of it.',
+  'remember {name}? "{said}"',
+  '{name}, "{said}" — we never finished that.',
+];
+
+/** The most recent remembered line that names `person`. */
+function recallAbout(person: string, memories: string[] | undefined): string | undefined {
+  if (!memories?.length) return undefined;
+  const needle = person.toLowerCase();
+  for (const m of memories) {
+    if (!m.toLowerCase().includes(needle)) continue;
+    // quotes would break the template's own quoting
+    const clean = m.replace(/["“”]/g, "").trim();
+    if (clean.length > 4) return clean;
+  }
+  return undefined;
+}
+
 function traitHas(traits: string[] | undefined, t: string): boolean {
   return !!traits && traits.includes(t);
 }
@@ -154,6 +181,14 @@ function generateSpeech(ctx: DecideContext, act: string, place: string): { text?
   };
 
   let pool: string[];
+  // A callback needs someone to recall, and a real memory of them. Checked before
+  // the generic pools so a resident who remembers you answers you, not the crowd.
+  const said = target ? recallAbout(target.name, self?.memories) : undefined;
+  if (target && said && rng() < 0.55) {
+    const text = fillTemplate(pick(CALLBACK_TEMPLATES, rng), { ...vars, said });
+    return { text, targetId: target.id };
+  }
+
   if (act === "argue" && target) pool = REPLY_TEMPLATES;
   else if (nearby.length > 0 && rng() < 0.55) pool = CONVERSATION_STARTERS;
   else if (act === "wander" || act === "stroll") pool = WANDER_THOUGHTS;
