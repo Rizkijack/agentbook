@@ -52,12 +52,28 @@ if (process.env.DATABASE_URL) {
 
 // Load or create world
 let world: TownSnapshot;
-try {
-  const loaded = await loadWithRecovery(DATA_PATH) as TownSnapshot;
-  // minimal validation
-  if (loaded && Array.isArray(loaded.herd) && loaded.config) world = loaded;
-  else world = createInitialWorld();
-} catch {
+// A file that exists but will not parse is a DIFFERENT case from no file at all.
+// Falling back to createInitialWorld() there started a fresh town and then, 800ms
+// later, the autosave wrote that over the real one — silent total loss. Refuse to
+// boot on an unreadable save instead; the operator moves it aside and starts again.
+if (existsSync(DATA_PATH)) {
+  let loaded: TownSnapshot | null = null;
+  try {
+    loaded = await loadWithRecovery(DATA_PATH) as TownSnapshot;
+  } catch (e) {
+    console.error(
+      `[persist] ${DATA_PATH} exists but could not be read. Refusing to boot so the save is not overwritten.`,
+    );
+    console.error(e instanceof Error ? e.message : String(e));
+    console.error("Move it aside (e.g. rename to .broken) and restart, or delete it to start a new town.");
+    process.exit(1);
+  }
+  if (!loaded || !Array.isArray(loaded.herd) || !loaded.config) {
+    console.error(`[persist] ${DATA_PATH} is missing herd or config. Refusing to boot rather than overwriting it.`);
+    process.exit(1);
+  }
+  world = loaded;
+} else {
   world = createInitialWorld();
 }
 
