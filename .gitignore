@@ -12,13 +12,40 @@ data/memories/
 frontend/dist
 backend/dist
 shared/dist
+
+# World-save scratch copies. These carry AgentRecord.tokenHash, which is
+# credential material, and this repo is public. `data/*.bak` does not cover
+# them: these files end in `-bak` and `.lost-town`, not in the `.bak`
+# extension, so the pattern silently missed them.
+data/town.json.pre-actfix-bak
+data/town.json.lost-town
+data/*.lost-town
+
+# Test-run logs written into the frontend package.
+frontend/*.txt
 # tsc incremental build info — stale copies silently break builds
 *.tsbuildinfo
 .DS_Store
 .vercel
 
-# Local working notes, not project state. AGENTS.md is agent instructions and
-# IDEA.md is a scratch pad — both are per-machine context, and this repo is
-# public, so neither belongs in the history.
-AGENTS.md
-IDEA.md
+# Explanatory documents, not product. This repo is public, so internal planning
+# and working context stay local.
+#
+#   AGENTS.md    - agent instructions, per-machine
+#   IDEA.md      - scratch pad
+#   00-*.md      - the build blueprint: architecture, phased roadmap, naming
+#                  rationale. Moves every revision, so it churns the log for
+#                  readers who have no use for it
+#   README.md    - kept local for the same reason
+#
+# NOT ignored, on purpose:
+#   skills/npc-agent/SKILL.md  - shared/test/skills.test.ts:19 readFileSync()s it
+#                                at module load. Ignore it and a fresh clone
+#                                fails the whole shared suite, not one test.
+#
+# Patterns are anchored with a leading slash on purpose: without it a bare
+# README.md would also swallow mcp/README.md.
+/AGENTS.md
+/IDEA.md
+/00-*.md
+/README.md
