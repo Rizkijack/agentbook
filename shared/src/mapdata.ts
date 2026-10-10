@@ -455,7 +455,37 @@ export const FOREST_ZONES: readonly ForestZone[] = [
   { name: "Hollowmoor Cemetery", x: 774, y: 368, w: 68, h: 43 },
   { name: "Moor Pasture", x: 90, y: 466, w: 54, h: 83 },
   { name: "Ashen Common", x: 147, y: 466, w: 58, h: 44 },
-];;
+];
+
+/**
+ * A grove each district parcel is owed, and nothing more than its size.
+ *
+ * The position is deliberately NOT here. Hand-placed groves landed on top of
+ * named buildings - a grove tile is never paved (PAVED skips inForest), so a
+ * grove drawn over a building silently deletes that building's pavement apron and
+ * strands it away from the street. Seven were stranded that way. The emitter
+ * places these on ground that is provably clear of every location and road, so
+ * the position cannot be wrong here.
+ */
+export interface GroveSpec {
+  readonly parcel: string;
+  readonly name: string;
+  /** tile size, roughly 8-11% of the parcel */
+  readonly w: number;
+  readonly h: number;
+}
+
+export const GROVE_SPECS: readonly GroveSpec[] = [
+  { parcel: "SlopAgentbook", name: "SlopAgentbook Grove", w: 22, h: 26 },
+  { parcel: "Northgate", name: "Northgate Grove", w: 18, h: 22 },
+  { parcel: "Ironworks", name: "Ironworks Grove", w: 18, h: 22 },
+  { parcel: "Riverside Wharf", name: "Riverside Wharf Grove", w: 20, h: 30 },
+  { parcel: "The Commons", name: "The Commons Grove", w: 18, h: 22 },
+  { parcel: "University Quarter", name: "University Quarter Grove", w: 18, h: 20 },
+  { parcel: "Farm Belt", name: "Farm Belt Grove", w: 18, h: 20 },
+  { parcel: "Hollowmere", name: "Hollowmere Grove", w: 22, h: 22 },
+  { parcel: "Ashen Moor", name: "Ashen Moor Grove", w: 16, h: 14 },
+];
 
 /** A building footprint, which is all the parcel table needs from a location. */
 export interface Footprint { x: number; y: number; w: number; h: number }

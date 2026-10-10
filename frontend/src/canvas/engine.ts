@@ -10,6 +10,7 @@ import {
   drawTerrainDecor, pushScenery, tickScenery, LAMP_GLOWS,
   resetQueueItems, drawQueue,
   TREE_DETAIL_MIN_ZOOM,
+  HOMES,
   type View, type SceneDraw, type QueueItem,
 } from "./scenery.js";
 
@@ -921,6 +922,52 @@ export class Xf {
 
     // trees, street furniture, vehicles — pushed first so buildings/agents win ties
     if (lod.scenery) pushScenery(queue, ctx, sceneView, sceneDraw);
+
+    // Decorative housing. Same queue as the named buildings and drawn with the
+    // same palette, so it reads as part of the town rather than a second layer
+    // dropped on top - but without a label, because 529 names on the canvas would
+    // be noise and none of them is a place anyone can be sent.
+    for (const h of HOMES) {
+      const hx = h.x * V, hy = h.y * V, hw = h.w * V, hh = h.h * V;
+      if (hx + hw < viewLeft || hx > viewRight || hy + hh < viewTop || hy > viewBottom) continue;
+      const seed = h.x * 73 + h.y * 151;
+      const variant = seed % 3;
+      queue.push({
+        y: hy + hh,
+        draw: () => {
+          ctx.save();
+          ctx.fillStyle = "rgba(0,0,0,0.10)";
+          ctx.fillRect(hx + 4, hy + 4, hw, hh);
+          const isDark = isDarkTheme || this.nightIntensity() > 0.5;
+          const ink = (isDarkTheme ? BUILD_INK.dark : BUILD_INK.light).base!;
+          let wall = isDark && !isDarkTheme ? "#5a4a3a" : ink.wall;
+          ctx.fillStyle = wall;
+          ctx.fillRect(hx, hy, hw, hh);
+          ctx.strokeStyle = ink.trim;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(hx, hy, hw, hh);
+          // ridge roof; the third variant is a hipped one so a parcel of houses
+          // does not read as one stamp repeated
+          ctx.fillStyle = ink.roof;
+          if (variant === 2) {
+            ctx.beginPath();
+            ctx.moveTo(hx - 2, hy);
+            ctx.lineTo(hx + hw / 2, hy - 6);
+            ctx.lineTo(hx + hw + 2, hy);
+            ctx.closePath();
+            ctx.fill();
+          } else {
+            ctx.fillRect(hx - 2, hy - 5, hw + 4, 5);
+          }
+          // one lit window, only where the house is big enough to carry it
+          if (hw > 48) {
+            ctx.fillStyle = this.nightIntensity() > 0.35 ? "#ffd98a" : ink.trim;
+            ctx.fillRect(hx + hw * 0.3, hy + hh * 0.4, 5, 5);
+          }
+          ctx.restore();
+        },
+      });
+    }
 
     for (const b of LOCATIONS) {
       const bx = b.x * V, by = b.y * V, bw = b.w * V, bh = b.h * V;

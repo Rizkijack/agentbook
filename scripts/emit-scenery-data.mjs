@@ -18,7 +18,7 @@
 // It now imports the tables directly, which is the whole fix.
 import { readFileSync, writeFileSync } from "node:fs";
 
-import { ROAD_SEGMENTS, FOREST_ZONES, DISTRICT_PARCELS } from "../shared/src/mapdata.ts";
+import { ROAD_SEGMENTS, FOREST_ZONES, DISTRICT_PARCELS, GROVE_SPECS } from "../shared/src/mapdata.ts";
 import { Pe, vt } from "../shared/src/map.ts";
 import { LOCATIONS } from "../backend/src/locations.ts";
 import { checkNetwork, walkReachable, reachFromBox, adjacency, edgeDisjointTo } from "../shared/src/netcheck.ts";
@@ -94,6 +94,68 @@ for (const [name, x1, y1, x2, y2] of CORE) {
 coreBlock.push("];");
 out.push(["core-roads", coreBlock.join("\n")]);
 
+// --- grove placement ---------------------------------------------------------
+// Every district parcel is owed a small wood, so the new housing density reads as
+// "town among trees" rather than "town in a field". The position is computed, not
+// written by hand: a grove tile is never paved (PAVED skips inForest), so a grove
+// drawn over a building silently deletes that building's pavement apron and
+// strands it from the street. Seven were stranded by hand-placed groves. These
+// are placed on ground that is provably clear of every location and road.
+const groveOverlapsSomething = (x, y, w, h, placed) => {
+  const hits = (r, m) => x + w + m > r.x && x - m < r.x + r.w && y + h + m > r.y && y - m < r.y + r.h;
+  if (LOCATIONS.some((l) => hits(l, GROVE_CLEARANCE))) return true;
+  if (placed.some((r) => hits(r, 2))) return true;
+  // Rect form, matching scenery.test.ts exactly. The narrower "x < x2" test let
+// every vertical road through: those segments have x2 === x1, so `x < x2` could
+// never be true and a grove parked on one sailed straight through.
+  if (ROAD_SEGMENTS.some((s) => {
+    const x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2);
+    const y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
+    return x + w > x1 && x < x2 + 1 && y + h > y1 && y < y2 + 1;
+  })) return true;
+  return false;
+};
+
+// Clearance from a named building, in tiles. Two is the floor that keeps the
+// invariant scenery-paving.test.ts asserts: a grove must not cover the building
+// or its one-tile border, or the building loses every paved tile it touched and
+// strands from the street. Larger values starve the dense parcels - at 9, seven
+// of the nine had nowhere legal left to go.
+const GROVE_CLEARANCE = 2;
+
+const placedGroves = [];
+const unplacedGroves = [];
+for (const spec of GROVE_SPECS) {
+  const p = DISTRICT_PARCELS.find((d) => d.name === spec.parcel);
+  if (!p) { unplacedGroves.push(`${spec.name}: no parcel "${spec.parcel}"`); continue; }
+  let best = null;
+  let bestScore = Infinity;
+  // scan every position in the parcel; prefer the one furthest from built ground,
+  // ties broken deterministically by position so the map never wobbles between runs
+  for (let y = p.y + 1; y + spec.h <= p.y + p.h - 1; y++) {
+    for (let x = p.x + 1; x + spec.w <= p.x + p.w - 1; x++) {
+      if (groveOverlapsSomething(x, y, spec.w, spec.h, placedGroves)) continue;
+      let nearest = Infinity;
+      for (const l of LOCATIONS) {
+        const dx = Math.max(l.x - (x + spec.w), x - (l.x + l.w), 0);
+        const dy = Math.max(l.y - (y + spec.h), y - (l.y + l.h), 0);
+        nearest = Math.min(nearest, dx * dx + dy * dy);
+      }
+      if (nearest < bestScore) { bestScore = nearest; best = { x, y }; }
+    }
+  }
+  if (!best) { unplacedGroves.push(`${spec.name}: no clear ground in ${spec.parcel}`); continue; }
+  placedGroves.push({ x: best.x, y: best.y, w: spec.w, h: spec.h, name: spec.name });
+}
+if (unplacedGroves.length) {
+  console.error("refusing to emit: a parcel grove has nowhere legal to go");
+  for (const g of unplacedGroves) console.error(`  ${g}`);
+  process.exit(1);
+}
+FORESTS.push(...placedGroves.map((g) => [g.name, g.x, g.y, g.w, g.h]));
+console.log(`groves   ${placedGroves.length} placed, one per parcel`);
+
+// built after the groves land in FORESTS, or they never reach the emitted block
 const forestBlock = ["export const FORESTS = ["];
 for (const [name, x, y, w, h] of FORESTS) {
   forestBlock.push(`  { x: ${x}, y: ${y}, w: ${w}, h: ${h}, name: ${JSON.stringify(name)} },`);
@@ -105,6 +167,70 @@ const lampBlock = ['const LAMPS: Array<[number, number, "n" | "s" | "w" | "e"]> 
 for (const [a, b, side] of LAMPS) lampBlock.push(`  [${a}, ${b}, ${JSON.stringify(side)}],`);
 lampBlock.push("];");
 out.push(["lamps", lampBlock.join("\n")]);
+
+// --- decorative housing --------------------------------------------------------
+// The 100 named locations are buildings an agent can walk into, and adding more
+// of them would mean more places to visit and a broken count assertion in
+// world.test.ts. What the map actually lacked was built *texture*: measured over
+// the nine district parcels, the named buildings covered 7.3% of the land they
+// sit on. So housing here is scenery - solid to pathfinding, paved, drawn, and
+// never a destination.
+//
+// Spread over the whole of every parcel on a fixed slot grid rather than seeded
+// around the named buildings, which is what made the town read as one dense core
+// with nothing anywhere else. Each slot is dropped if it would touch a road, a
+// named location, a grove, or a house already placed.
+const HOME_SLOT_W = 9;
+const HOME_SLOT_H = 8;
+const HOME_MARGIN = 1;
+
+// Corner tests are not enough here. A vertical segment has x2 === x1, so probing
+// only (x,y) and (x+w,y+h) walks straight past a street running down the middle of
+// a house. Rect overlap, widened by the margin.
+const isRoad = (x, y, w, h, m) =>
+  ROAD_SEGMENTS.some((s) => {
+    const x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2);
+    const y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
+    return x + w + m > x1 && x - m < x2 + 1 && y + h + m > y1 && y - m < y2 + 1;
+  });
+const hits = (x, y, w, h, list, m) =>
+  list.some((r) => x + w + m > r.x && x - m < r.x + r.w && y + h + m > r.y && y - m < r.y + r.h);
+const inGrove = (x, y, w, h) =>
+  hits(x, y, w, h, FOREST_ZONES.filter((z) => z.name.endsWith("Grove")), 0);
+
+// Deterministic: same input, same town. A hash, not Math.random.
+const jitter = (a, b, salt) => {
+  const s = Math.sin(a * 127.1 + b * 311.7 + salt * 74.7) * 43758.5453;
+  return s - Math.floor(s);
+};
+
+const homes = [];
+for (const p of DISTRICT_PARCELS) {
+  for (let gy = p.y + 1; gy + 4 < p.y + p.h; gy += HOME_SLOT_H) {
+    for (let gx = p.x + 1; gx + 5 < p.x + p.w; gx += HOME_SLOT_W) {
+      const jx = jitter(gx, gy, 1);
+      const jy = jitter(gx, gy, 2);
+      const x = gx + Math.floor(jx * 3);
+      const y = gy + Math.floor(jy * 3);
+      // 4x3, 5x3 or 5x4 - small enough to read as housing, varied so the parcel
+      // does not turn into one repeated stamp
+      const w = 4 + Math.floor(jitter(gx, gy, 3) * 2);
+      const h = 3 + Math.floor(jitter(gx, gy, 4) * 2);
+      if (x + w > p.x + p.w - 1 || y + h > p.y + p.h - 1) continue;
+      if (isRoad(x, y, w, h, HOME_MARGIN)) continue;
+      if (hits(x, y, w, h, LOCATIONS, HOME_MARGIN + 1)) continue;
+      if (inGrove(x, y, w, h)) continue;
+      if (hits(x, y, w, h, homes, HOME_MARGIN)) continue;
+      homes.push({ x, y, w, h });
+    }
+  }
+}
+
+const homeBlock = ["export const HOMES: readonly Home[] = ["];
+for (const b of homes) homeBlock.push(`  { x: ${b.x}, y: ${b.y}, w: ${b.w}, h: ${b.h} },`);
+homeBlock.push("];");
+out.push(["homes", homeBlock.join("\n")]);
+console.log(`homes    ${homes.length} across ${DISTRICT_PARCELS.length} parcels`);
 // --- gate: the network must be a network -------------------------------------
 // Everything below this line writes files, so the checks run first. checkNetwork
 // returns every failure it finds rather than throwing on the first one: fixing a
@@ -143,6 +269,7 @@ const TARGETS = {
   "access-spurs": "shared/src/map.ts",
   forests: "frontend/src/canvas/scenery.ts",
   lamps: "frontend/src/canvas/scenery.ts",
+  homes: "frontend/src/canvas/scenery.ts",
 };
 
 const files = new Map();
