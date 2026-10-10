@@ -16,6 +16,7 @@ const PaperView = lazy(() => import("./views/PaperView.js").then((m) => ({ defau
 const ForkView = lazy(() => import("./views/ForkView.js").then((m) => ({ default: m.ForkView })));
 const LineageView = lazy(() => import("./views/LineageView.js").then((m) => ({ default: m.LineageView })));
 const CoinView = lazy(() => import("./views/CoinView.js").then((m) => ({ default: m.CoinView })));
+const ProjectsView = lazy(() => import("./views/ProjectsView.js").then((m) => ({ default: m.ProjectsView })));
 const DocsView = lazy(() => import("./views/DocsView.js").then((m) => ({ default: m.DocsView })));
 const LlamaView = lazy(() => import("./views/LlamaView.js").then((m) => ({ default: m.LlamaView })));
 const QuestView = lazy(() => import("./views/QuestView.js").then((m) => ({ default: m.QuestView })));
@@ -98,6 +99,7 @@ export default function App() {
           <Link to="fork" className={page === "fork" ? "active" : ""}>Fork</Link>
           <Link to="register" className={page === "register" ? "active" : ""}>Register</Link>
           <Link to="lineage" className={page === "lineage" ? "active" : ""}>Lineage</Link>
+          <Link to="projects" className={page === "projects" ? "active" : ""}>Projects</Link>
           <Link to="coin" className={page === "coin" ? "active" : ""}>Coin</Link>
           <Link to="docs" className={page === "docs" ? "active" : ""}>Docs</Link>
         </nav>
@@ -135,12 +137,13 @@ export default function App() {
         {page === "fork" && <ForkView snapshot={state} preset={arg} onForked={() => { /* state will refresh via SSE herd */ }} />}
         {page === "register" && <RegisterView />}
         {page === "lineage" && <LineageView snapshot={state} />}
-        {page === "coin" && <CoinView snapshot={state} />}
+        {page === "projects" && <ProjectsView snapshot={state} />}
+          {page === "coin" && <CoinView snapshot={state} />}
         {page === "docs" && <DocsView snapshot={state} />}
         {page === "contest" && <ContestView snapshot={state} id={arg} />}
         {page === "llama" && arg && <LlamaView snapshot={state} id={arg} session={session} />}
         {page === "llama" && !arg && <div className="card">No llama id. <Link to="herd">Go to herd</Link></div>}
-        {!["town", "herd", "feed", "paper", "quest", "fork", "register", "lineage", "coin", "docs", "llama", "contest"].includes(page) && (
+        {!["town", "herd", "feed", "paper", "quest", "fork", "register", "lineage", "projects", "coin", "docs", "llama", "contest"].includes(page) && (
           <div className="card">Unknown page "{page}". <Link to="town">Go to town</Link></div>
         )}
         </Suspense>
