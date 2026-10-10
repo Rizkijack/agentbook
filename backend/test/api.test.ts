@@ -22,6 +22,17 @@ describe("API", () => {
     expect(res.body.llm).toBeDefined();
   });
 
+  // `brain` used to report world.config.brain, so it read "llm" while calls were 0 and
+  // failures were climbing - which sends someone debugging after an API key that is not
+  // the problem. It must report the mode actually in use, and keep the config one apart.
+  it("GET /api/status reports the brain in use, not the one configured", async () => {
+    const res = await request(app).get("/api/status");
+    expect(["llm", "sim"]).toContain(res.body.brain);
+    expect(res.body.configBrain).toBe("llm");
+    // no key in the test env, so the sim is necessarily what is running
+    expect(res.body.brain).toBe("sim");
+  });
+
   it("GET /api/treasury returns sol etc", async () => {
     const res = await request(app).get("/api/treasury");
     expect(res.status).toBe(200);

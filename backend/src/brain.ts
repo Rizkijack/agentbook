@@ -23,7 +23,12 @@ export function createBrain(opts?: { llm?: LLMBrain; cap?: number }) {
   return {
     get mode(): "llm" | "sim" {
       resetIfNewDay();
-      if (spend.failures > 0 && spend.calls === 0) return "sim"; // fallback indicator, but config.brain stays llm per doc status
+      // "llm" requires proof it works: spend.calls only moves on success, so zero
+      // calls means nothing has succeeded today. The old check was
+      // `failures > 0 && calls === 0`, which reported "llm" at boot - before a single
+      // attempt had been made - and only flipped after the first failure.
+      if (spend.calls === 0) return "sim";
+      if (spend.usd >= spend.cap) return "sim";
       return "llm";
     },
     async decide(ctx: DecideContext) {

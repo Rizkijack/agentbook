@@ -362,7 +362,11 @@ app.get("/api/treasury", (_req, res) => {
 // GET /api/status
 app.get("/api/status", (_req, res) => {
   res.json({
-    brain: world.config.brain,
+    // The mode actually in use, not the configured one. Reporting world.config.brain
+    // said "llm" while calls were 0 and failures 252, which sends a reader hunting an
+    // API key that is not there. configBrain stays for when the two differ.
+    brain: brain.mode,
+    configBrain: world.config.brain,
     herd: world.herd.length,
     feed: world.feed.length,
     spend: { dayKey: spend.dayKey, usd: spend.usd, calls: spend.calls, cap: spend.cap },
